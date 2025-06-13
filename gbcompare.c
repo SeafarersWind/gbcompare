@@ -4,36 +4,37 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
+#include <direct.h>
 
 
 
-// POKERED-SPECIFIC
+// POKERED-JP-SPECIFIC
 const char* INCLUDE_FILES[] = {
 	"includes.asm"
 };
 
 const char* MAIN_FILES[] = {
-	"audio.asm",
-	"home.asm",
-	"main.asm",
-	"maps.asm",
 	"ram.asm",
 	"text.asm",
 	"gfx/pics.asm",
 	"gfx/sprites.asm",
-	"gfx/tilesets.asm"
+	"gfx/tilesets.asm",
+	"audio.asm",
+	"home.asm",
+	"main.asm",
+	"maps.asm",
 };
 
 const char* LAYOUT_FILE = "layout.link";
 
-const char* ROM_FILE = "aka.gb";
-// POKERED-SPECIFIC
+const char* ROM_FILE = "midori.gb";
+// POKERED-JP-SPECIFIC
 
 bool debug = false;
 
 
 
-#define isWhitespace(c) (c==' ' || c=='\t' || c=='\v')
+#define isWhitespace(c) (c==' ' || c=='\t' || c=='\v' || c=='\r')
 #define isAlpha(c) ((c>='a' && c<= 'z') || (c>='A' && c<='Z'))
 #define isUppercase(c) (c>='A' && c<='Z')
 #define isLowercase(c) (c>='a' && c<='z')
@@ -51,17 +52,23 @@ bool debug = false;
 
 enum asmtoken {
 	OPCODE, DIRECTIVE, PREDECLARED_SYMBOL, REGISTER, CONDITION, NUMBER, STRING, OPERATOR, COMMA, MEMORY_OPEN, MEMORY_CLOSE,
-	CONSTANT, CONSTANT_STRING, VARIABLE, MACRO, LABEL, ASSUMPTION, UNRECORDED_SYMBOL, NEWLINE, REGION_TYPE, END_OF_FILE, UNKNOWN_TOKEN
+	CONSTANT, CONSTANT_STRING, VARIABLE, MACRO, LABEL, ASSUMPTION, UNRECORDED_SYMBOL, TEXT_MACRO, NEWLINE, REGION_TYPE, END_OF_FILE, UNKNOWN_TOKEN
 };
-const char* TOKEN_STRINGS[] = {
+const char* TOKENS[] = {
 	"opcode", "directive", "predefined symbol", "register", "condition", "number", "string", "operator", ",", "[", "]",
-	"constant", "constant string", "variable", "macro", "label", "assumption", "unrecorded symbol", "newline", "region type", "end of file", "?????"
+	"constant", "constant string", "variable", "macro", "label", "assumption", "unrecorded symbol", "text macro", "newline", "region type", "end of file", "?????"
 };
-#define TOKEN_STRINGS_COUNT sizeof(TOKEN_STRINGS)/sizeof(TOKEN_STRINGS[0])
+#define TOKENS_COUNT sizeof(TOKENS)/sizeof(TOKENS[0])
 
 struct token {
 	enum asmtoken type;
 	unsigned int content;
+};
+
+struct section {
+	char* name;
+	char* path;
+	long filepos;
 };
 
 struct label {
@@ -106,28 +113,30 @@ struct mapchar {
 
 enum asmopcode {
 	NOP,
-	LD, LDH,
+	LD, LDH, LDI, LDD,
 	INC, DEC, ADD, ADC, SUB, SBC,
-	SET, SCF, RES, OR, AND, XOR, CPL, CCF, SWAP, CP, BIT,
-	SRL, SRA, SLA, RR, RRA, RRC, RRCA, RL, RLA, RLC, RLCA,
+	SCF, OR, AND, XOR, CPL, CCF, CP,
+	RRA, RRCA, RLA, RLCA,
 	JP, JR, CALL, RST, RET, RETI,
 	PUSH, POP,
 	EI, DI, DAA, STOP, HALT,
+	RLC, RRC, RL, RR, SLA, SRA, SWAP, SRL, BIT, RES, SET,
 	INVALID_OPCODE
 };
-const char* OPCODE_STRINGS[] = {
+const char* OPCODES[] = {
 	"nop",
-	"ld", "ldh",
+	"ld", "ldh", "ldi", "ldd",
 	"inc", "dec", "add", "adc", "sub", "sbc",
-	"set", "scf", "res", "or", "and", "xor", "cpl", "ccf", "swap", "cp", "bit",
-	"srl", "sra", "sla", "rr", "rra", "rrc", "rrca", "rl", "rla", "rlc", "rlca",
+	"scf", "or", "and", "xor", "cpl", "ccf", "cp",
+	"rra", "rrca", "rla", "rlca",
 	"jp", "jr", "call", "rst", "ret", "reti",
 	"push", "pop",
-	"ei", "di", "daa", "stop", "halt"
+	"ei", "di", "daa", "stop", "halt",
+	"rlc", "rrc", "rl", "rr", "sla", "sra", "swap", "srl", "bit", "res", "set"
 };
-#define OPCODE_STRINGS_COUNT sizeof(OPCODE_STRINGS)/sizeof(OPCODE_STRINGS[0])
+#define OPCODES_COUNT sizeof(OPCODES)/sizeof(OPCODES[0])
 
-enum opcodearg {
+enum asmarg {
 	NO,
 	A, B, C, D, E, H, L, AF, BC, DE, HL, SP, SPe8,
 	n8, n16, e8,
@@ -137,7 +146,7 @@ enum opcodearg {
 	ccZ, ccNZ, ccC, ccNC,
 	INVALID_ARG
 };
-const char* OPCODEARG_STRINGS[] = {
+const char* OPCODEARGS[] = {
 	"",
 	"a", "b", "c", "d", "e", "h", "l", "af", "bc", "de", "hl", "sp", "sp + e8",
 	"n8", "n16", "e8",
@@ -146,61 +155,74 @@ const char* OPCODEARG_STRINGS[] = {
 	"[c]", "[bc]", "[de]", "[hl]", "[hli]", "[hld]", "[a8]", "[a16]",
 	"z", "nz", "c", "nc"
 };
-#define OPCODEARG_STRINGS_COUNT sizeof(OPCODEARG_STRINGS)/sizeof(OPCODEARG_STRINGS[0])
+#define OPCODEARGS_COUNT sizeof(OPCODEARGS)/sizeof(OPCODEARGS[0])
 
 enum asmdirective {
 	DIR_DB, DIR_DW, DIR_DL, DIR_DS, DIR_RSRESET, DIR_RSSET, DIR_RB, DIR_RW, DIR_RL, DIR_CHARMAP,
-	DIR_BANK, DIR_HIGH, DIR_LOW,
-	DIR_DEF, DIR_REDEF, DIR_EQU, DIR_EQUS, DIR_IF, DIR_ELIF, DIR_ELSE, DIR_ENDC, DIR_REPT, DIR_FOR, DIR_ENDR, DIR_MACRO, DIR_ENDM, DIR_INCLUDE,
-	DIR_SECTION, DIR_UNION, DIR_NEXTU, DIR_ENDU, DIR_LOAD,
+	DIR_BANK, DIR_HIGH, DIR_LOW, DIR_SIZEOF, DIR_STARTOF,
+	DIR_STRLEN, DIR_STRCAT, DIR_STRCMP, DIR_STRIN, DIR_STRRIN, DIR_STRFIND, DIR_STRSUB, DIR_STRUPR, DIR_STRLWR, DIR_STRRPL, DIR_STRFMT, DIR_INCHARMAP, DIR_CHARLEN, DIR_CHARSUB,
+	DIR_DEF, DIR_REDEF, DIR_EQU, DIR_EQUS, DIR_PURGE, DIR_EXPORT,
+	DIR_IF, DIR_ELIF, DIR_ELSE, DIR_ENDC, DIR_REPT, DIR_FOR, DIR_ENDR,
+	DIR_MACRO, DIR_ENDM, DIR_SHIFT,
+	DIR_INCLUDE, DIR_INCBIN,
+	DIR_SECTION, DIR_ENDSECTION, DIR_LOAD, DIR_ENDL, DIR_UNION, DIR_NEXTU, DIR_ENDU,
 	DIR_FAIL, DIR_WARN, DIR_ASSERT,
+	DIR_PUSHO, DIR_POPO, DIR_OPT,
 	INVALID_DIRECTIVE
 };
-const char* DIRECTIVE_STRINGS[] = {
+const char* DIRECTIVES[] = {
 	"DB", "DW", "DL", "DS", "RSRESET", "RSSET", "RB", "RW", "RL", "CHARMAP",
-	"BANK", "HIGH", "LOW",
-	"DEF", "REDEF", "EQU", "EQUS", "IF", "ELIF", "ELSE", "ENDC", "REPT", "FOR", "ENDR", "MACRO", "ENDM", "INCLUDE",
-	"SECTION", "UNION", "NEXTU", "ENDU", "LOAD",
+	"BANK", "HIGH", "LOW", "SIZEOF", "STARTOF",
+	"STRLEN", "STRCAT", "STRCMP", "STRIN", "STRRIN", "STRFIND", "STRSUB", "STRUPR", "STRLWR", "STRRPL", "STRFMT", "INCHARMAP", "CHARLEN", "CHARSUB",
+	"DEF", "REDEF", "EQU", "EQUS", "PURGE", "EXPORT",
+	"IF", "ELIF", "ELSE", "ENDC", "REPT", "FOR", "ENDR",
+	"MACRO", "ENDM", "SHIFT",
+	"INCLUDE", "INCBIN",
+	"SECTION", "ENDSECTION", "LOAD", "ENDL", "UNION", "NEXTU", "ENDU",
 	"FAIL", "WARN", "ASSERT",
+	"PUSHO", "POPO", "OPT",
 };
-#define DIRECTIVE_STRINGS_COUNT sizeof(DIRECTIVE_STRINGS)/sizeof(DIRECTIVE_STRINGS[0])
+#define DIRECTIVES_COUNT sizeof(DIRECTIVES)/sizeof(DIRECTIVES[0])
 
 enum asmregiontype {
 	ROM0, ROMX, VRAM, SRAM, WRAM0, WRAMX, OAM, HRAM, INVALID_REGION_TYPE
 };
-const char* REGION_STRINGS[] = {
+const char* REGIONS[] = {
 	"ROM0", "ROMX", "VRAM", "SRAM", "WRAM0", "WRAMX", "OAM", "HRAM"
 };
-#define REGION_STRINGS_COUNT sizeof(REGION_STRINGS)/sizeof(REGION_STRINGS[0])
+#define REGIONS_COUNT sizeof(REGIONS)/sizeof(REGIONS[0])
 const unsigned long REGION_ADDRESSES[] = {
 	0x0000, 0x4000, 0x8000, 0xA000, 0xC000, 0xC000, 0xFE00, 0xFF80
+};
+const unsigned long REGION_SIZES[] = {
+	0x4000, 0x4000, 0x2000, 0x2000, 0x2000, 0x2000, 0x00A0, 0x007F
 };
 
 enum asmpredef {
 	NARG, RS, INVALID_PREDEF
 };
-const char* PREDEF_STRINGS[] = {
+const char* PREDEFS[] = {
 	"_NARG", "_RS"
 };
-#define PREDEF_STRINGS_COUNT sizeof(PREDEF_STRINGS)/sizeof(PREDEF_STRINGS[0])
+#define PREDEFS_COUNT sizeof(PREDEFS)/sizeof(PREDEFS[0])
 
 enum asmregister {
 	REG_A, REG_B, REG_C, REG_D, REG_E, REG_H, REG_L,
 	REG_AF, REG_BC, REG_DE, REG_HL, REG_SP, REG_HLI, REG_HLD,
 	INVALID_REGISTER
 };
-const char* REGISTER_STRINGS[] = {
+const char* REGISTERS[] = {
 	"a", "b", "c", "d", "e", "h", "l", "af", "bc", "de", "hl", "sp", "hli", "hld"
 };
-#define REGISTER_STRINGS_COUNT sizeof(REGISTER_STRINGS)/sizeof(REGISTER_STRINGS[0])
+#define REGISTERS_COUNT sizeof(REGISTERS)/sizeof(REGISTERS[0])
 
 enum asmcondition {
 	CC_Z, CC_NZ, CC_C, CC_NC, INVALID_CONDITION
 };
-const char* CC_STRINGS[] = {
+const char* CCS[] = {
 	"z", "nz", "c", "nc"
 };
-#define CC_STRINGS_COUNT sizeof(CC_STRINGS)/sizeof(CC_STRINGS[0])
+#define CCS_COUNT sizeof(CCS)/sizeof(CCS[0])
 
 enum asmoperator {
 	OPEN_PARENTHESIS, CLOSE_PARENTHESIS,
@@ -213,7 +235,7 @@ enum asmoperator {
 	EQUALS, PLUS_EQUALS, MINUS_EQUALS, MULTIPLY_EQUALS, DIVIDE_EQUALS, MODULO_EQUALS, SHIFT_LEFT_EQUALS, SHIFT_RIGHT_EQUALS, AND_EQUALS, OR_EQUALS, XOR_EQUALS,
 	END_OF_EXPRESSION
 };
-const char* OPERATOR_STRINGS[] = {
+const char* OPERATORS[] = {
 	"(", ")",
 	"**",
 	"~", "!",
@@ -224,7 +246,7 @@ const char* OPERATOR_STRINGS[] = {
 	"=", "+=", "-=", "*=", "/=", "%=", "<<=", ">>=", "&=", "|=", "^=",
 	"END"
 };
-#define OPERATOR_STRINGS_COUNT sizeof(OPERATOR_STRINGS)/sizeof(OPERATOR_STRINGS[0])
+#define OPERATORS_COUNT sizeof(OPERATORS)/sizeof(OPERATORS[0])
 
 const unsigned int OPERATOR_PRIORITY[] = {
 	13, 0,
@@ -239,14 +261,65 @@ const unsigned int OPERATOR_PRIORITY[] = {
 };
 #define OPERATOR_PRIORITY_COUNT sizeof(OPERATOR_PRIORITY)/sizeof(OPERATOR_PRIORITY[0])
 
+enum textcommand {
+	TEXT, NEXT, LINE, PARA, CONT, DONE, PROMPT, PAGE, DEX,
+	TEXT_START, TEXT_RAM, TEXT_BCD, TEXT_MOVE, TEXT_BOX, TEXT_LOW,
+	TEXT_PROMPTBUTTON, TEXT_SCROLL, TEXT_ASM, TEXT_DECIMAL, TEXT_PAUSE,
+	SOUND_GET_ITEM_1, SOUND_LEVEL_UP, TEXT_DOTS, TEXT_WAITBUTTON,
+	SOUND_POKEDEX_RATING, SOUND_GET_ITEM_1_DUPLICATE, SOUND_GET_ITEM_2,
+	SOUND_GET_KEY_ITEM, SOUND_CAUGHT_MON, SOUND_DEX_PAGE_ADDED, SOUND_CRY_NIDORINA,
+	SOUND_CRY_PIDGEOT, SOUND_CRY_DEWGONG, TEXT_FAR,
+	TEXT_END,
+	TX_DB
+};
+const char* TEXT_COMMANDS[] = {
+	"text", "next", "line", "para", "cont", "done", "prompt", "page", "dex",
+	"text_start", "text_ram", "text_bcd", "text_move", "text_box", "text_low",
+	"text_promptbutton", "text_scroll", "text_asm", "text_decimal", "text_pause",
+	"sound_get_item_1", "sound_level_up", "text_dots", "text_waitbutton",
+	"sound_pokedex_rating", "sound_get_item_1_duplicate", "sound_get_item_2",
+	"sound_get_key_item", "sound_caught_mon", "sound_dex_page_added", "sound_cry_nidorina",
+	"sound_cry_pidgeot", "sound_cry_dewgong", "text_far",
+	"text_end",
+	"db  "
+};
+const unsigned int TEXT_COMMAND_IDS[] = {
+	0x00, 0x4E, 0x4F, 0x51, 0x55, 0x57, 0x58, 0x49, 0x5F,
+	0x00, 0x01, 0x02, 0x03, 0x04, 0x05,
+	0x06, 0x07, 0x08, 0x09, 0x0A,
+	0x0B, 0x0B, 0x0C, 0x0D,
+	0x0E, 0x0F, 0x10,
+	0x11, 0x12, 0x13, 0x14,
+	0x15, 0x16, 0x17,
+	0x50,
+	0
+};
+const unsigned int TEXT_COMMAND_SIZES[] = {
+	0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02,
+	0x01, 0x03, 0x04, 0x03, 0x05, 0x01,
+	0x01, 0x01, 0x01, 0x04, 0x01,
+	0x01, 0x01, 0x02, 0x01,
+	0x01, 0x01, 0x01,
+	0x01, 0x01, 0x01, 0x01,
+	0x01, 0x01, 0x04,
+	0x01,
+	0x01, 0x03, 0x01, 0x01,
+	0x01, 0x01, 0x01,
+	0x01,
+	0
+};
+#define TEXT_COMMAND_COUNT (sizeof(TEXT_COMMANDS)/sizeof(TEXT_COMMANDS[0]) - 1)
+#define newTextcommand(i) (i >= TEXT && i <= DEX)
+#define terminatingTextcommand(i) (i == DONE || i == PROMPT || i == DEX || i == TEXT_END || i == TEXT_ASM)
+
 
 
 
 
 struct instruction {
 	enum asmopcode opcode;
-	enum opcodearg arg1;
-	enum opcodearg arg2;
+	enum asmarg arg1;
+	enum asmarg arg2;
 	unsigned char byte;
 };
 
@@ -491,7 +564,7 @@ const struct instruction INSTRUCTIONS[] = {
 	
 	{ LDH,m_a8,  A,   0xE0 },
 	{ POP,  HL,  NO,  0xE1 },
-	{ LD, m_C,   A,   0xE2 },
+	{ LDH,m_C,   A,   0xE2 },
 	//  ---           0xE3
 	//  ---           0xE4
 	{ PUSH, HL,  NO,  0xE5 },
@@ -508,7 +581,7 @@ const struct instruction INSTRUCTIONS[] = {
 	
 	{ LDH,  A, m_a8,  0xF0 },
 	{ POP,  AF,  NO,  0xF1 },
-	{ LD,   A, m_C,   0xF2 },
+	{ LDH,  A, m_C,   0xF2 },
 	{ DI,   NO,  NO,  0xF3 },
 	//  ---           0xF4
 	{ PUSH, AF,  NO,  0xF5 },
@@ -806,9 +879,12 @@ FILE* asmfile;
 char* asmpath;
 FILE* romfile;
 unsigned int linenumber;
+bool asmfilebackedup = false;
+
 unsigned long mempos;
 enum asmregiontype currentregion = INVALID_REGION_TYPE;
 unsigned char currentsection[1024];
+unsigned char metasection[1024];
 
 struct label* labellist[64];
 unsigned int labelcount = 0;
@@ -846,14 +922,24 @@ unsigned int localconststrstart;
 #define incrementConststrlist conststrcount++; if(conststrcount % 1024 == 0) conststrlist[conststrcount/1024] = malloc(1024 * sizeof(conststrlist[conststrcount/1024][0]))
 #define incrementCharmaplist charmapcount++; if(charmapcount % 1024 == 0) charmaplist[charmapcount/1024] = malloc(1024 * sizeof(charmaplist[charmapcount/1024][0]))
 
-long predeclaredsymbols[PREDEF_STRINGS_COUNT];
+#define assertTokenType(token, TYPE) if(token.type != TYPE) { errorUnexpectedToken(token); return -1; }
+#define assertLineBreak(token) if(token.type != NEWLINE && token.type != END_OF_FILE) { errorUnexpectedToken(token); return -1; }
+#define assertToken(token, TYPE, CONTENT)  if(token.type != TYPE || token.content != CONTENT) { errorUnexpectedToken(token); return -1; }
+#define assertNextTokenType(TYPE) identifyNextToken(); assertTokenType(token, TYPE)
+#define assertNextToken(TYPE, CONTENT) identifyNextToken(); assertToken(token, TYPE, CONTENT)
+#define assertNextLineBreak() identifyNextToken(); assertLineBreak(token)
+
+long predeclaredsymbols[PREDEFS_COUNT];
 #define _NARG predeclaredsymbols[NARG]
 #define _RS predeclaredsymbols[RS]
 
 
 bool charisliteral = false;
-bool instring = false;
-bool lastsymbolislocal = false;
+bool firsttoken = false;
+bool indef = false;
+bool newuniqueaffix = false;
+bool loaddata = false;
+bool loadlabels = false;
 unsigned char** currentargs = 0;
 
 unsigned char ungottenchars[1024];
@@ -866,41 +952,45 @@ unsigned char* currentmacro = 0;
 unsigned int currentmacropos;
 
 char symbolstr[1024];
-unsigned char* labelscope;
-bool lastsymbolislocal;
+unsigned char labelscope[1024];
+unsigned char* locallabelscope;
 
 unsigned int ifdepth = 0;
 
 unsigned long repeatcount = 0;
 unsigned char repeatsymbol[32];
-long repeatasmfilepos;
-unsigned int repeatlinenumber;
 bool repeating = false;
 
 unsigned long unionstart;
 unsigned long unionend;
 bool inunion = false;
 
+char bin0 = '0';
+char bin1 = '1';
+
 
 
 // errors
+	void printLocation() { printf("\n%02X:%04X %s (%d)", mempos>>16, mempos&0xFFFF, asmpath, linenumber); }
+	
 	void errorUnexpectedToken(struct token token) {
+		printLocation();
 		const char* content;
 		switch(token.type) {
 		case OPCODE:
-			content = OPCODE_STRINGS[token.content];
+			content = OPCODES[token.content];
 			break;
 		case DIRECTIVE:
-			content = DIRECTIVE_STRINGS[token.content];
+			content = DIRECTIVES[token.content];
 			break;
 		case REGISTER:
-			content = REGISTER_STRINGS[token.content];
+			content = REGISTERS[token.content];
 			break;
 		case CONDITION:
-			content = CC_STRINGS[token.content];
+			content = CCS[token.content];
 			break;
 		case OPERATOR:
-			content = OPERATOR_STRINGS[token.content];
+			content = OPERATORS[token.content];
 			break;
 		case MACRO:
 			content = macros(token.content).name;
@@ -914,6 +1004,9 @@ bool inunion = false;
 		case CONSTANT:
 			content = consts(token.content).name;
 			break;
+		case CONSTANT_STRING:
+			content = costrs(token.content).name;
+			break;
 		case ASSUMPTION:
 			content = asmpts(token.content).name;
 			break;
@@ -924,156 +1017,268 @@ bool inunion = false;
 		case UNRECORDED_SYMBOL:
 			content = (char*)token.content;
 			break;
+		case REGION_TYPE:
+			content = REGIONS[token.content];
+			break;
 		default:
-			content = TOKEN_STRINGS[token.type];
+			content = TOKENS[token.type];
 			break;
 		}
-		printf("Error(%d)(%02X:%04X): Unexpected %s \"%s\"\n", linenumber, mempos>>16, mempos&0xFFFF, TOKEN_STRINGS[token.type], content);
-		return;
+		printf("\nError: Unexpected %s \"%s\"\n", TOKENS[token.type], content);
 	}
 	
-	void errorUnexpectedArg() {
-		printf("Error(%d)(%02X:%04X): Unexpected argument for directive\n", linenumber, mempos>>16, mempos&0xFFFF);
-		return;
+	void errorCannotFindFile(const char* filepath) {
+		printLocation();
+		printf("\nError: Cannot find \"%s\"\n", filepath);
+	}
+	
+	void errorValueTooLarge(unsigned int numbits) {
+		printLocation();
+		printf("\nError: Value must be %d-bit\n", numbits);
 	}
 
-	void errorMustBe3Bit(struct token token) {
-		printf("Error(%d)(%02X:%04X): Value must be 3-bit\n", linenumber, mempos>>16, mempos&0xFFFF);
-		return;
-	}
-
-	void errorMustBe8Bit(struct token token) {
-		printf("Error(%d)(%02X:%04X): Value %d must be 8-bit\n", linenumber, mempos>>16, mempos&0xFFFF, token.content);
-		return;
-	}
-
-	void errorMustBe16Bit(struct token token) {
-		printf("Error(%d)(%02X:%04X): Value must be 16-bit\n", linenumber, mempos>>16, mempos&0xFFFF);
-		return;
-	}
-
-	void errorTargetOutOfReach(struct token token) {
-		printf("Error(%d)(%02X:%04X): Target out of reach\n", linenumber, mempos>>16, mempos&0xFFFF);
-		return;
+	void errorTargetOutOfReach(long value) {
+		printLocation();
+		printf("\nError: Target out of reach %d\n", (signed char)value);
 	}
 
 	void errorInconsistentAssumption(char* name, int currentvalue, int previousvalue) {
-		printf("Error(%d)(%02X:%04X): %s was previously assumed as %06X, and is now assumed as %06X.\n", linenumber, mempos>>16, mempos&0xFFFF, name, previousvalue, currentvalue);
-		return;
+		printLocation();
+		printf("\nError: %s was previously assumed as $%04X, and is now assumed as $%04X.\n", "?", previousvalue, currentvalue);
 	}
 
 	void errorIncorrectAssumption(char* name, int realvalue, int assumedvalue) {
-		printf("Error(%d)(%02X:%04X): %s was previously assumed as %06X, and is now defined as %06X.\n", linenumber, mempos>>16, mempos&0xFFFF, name, assumedvalue, realvalue);
-		return;
+		printLocation();
+		printf("\nError: %s was previously assumed as $%04X, and is now defined as $%04X.\n", name, assumedvalue, realvalue);
 	}
 
 	void errorLabelOverflow() {
-		printf("Error(%d)(%02X:%04X): Too many labels!!\n", linenumber, mempos>>16, mempos&0xFFFF);
-		return;
+		printLocation();
+		printf("\nError: Too many labels!!\n");
 	}
 
 	void errorMacroOverflow() {
-		printf("Error(%d)(%02X:%04X): Too many macros!!\n", linenumber, mempos>>16, mempos&0xFFFF);
-		return;
+		printLocation();
+		printf("\nError: Too many macros!!\n");
 	}
 
 	void errorNestedMacros() {
-		printf("Error(%d)(%02X:%04X): Cannot nest macros\n", linenumber, mempos>>16, mempos&0xFFFF);
-		return;
+		printLocation();
+		printf("\nError: Cannot nest macros\n");
 	}
 	
 	void errorMacroWithoutEnd() {
-		printf("Error(%d)(%02X:%04X): Macro started without end\n", linenumber, mempos>>16, mempos&0xFFFF);
-		return;
+		printLocation();
+		printf("\nError: Macro started without end\n");
+	}
+	
+	void errorCannotShiftOutsideMacro() {
+		printLocation();
+		printf("\nError: Shift cannot exist outside of a macro\n");
 	}
 
 	void errorArgRequired(unsigned int expectedarg, unsigned int givenargcount) {
-		printf("Error(%d)(%02X:%04X): Argument %d is required in this maco, but only %d are giveen\n", linenumber, mempos>>16, mempos&0xFFFF, expectedarg, givenargcount);
-		return;
+		printLocation();
+		printf("\nError: Argument %d is required in this maco, but only %d are giveen\n", expectedarg, givenargcount);
 	}
 
 	void errorLabelAlreadyDefined(char* name) {
-		printf("Error(%d)(%02X:%04X): Second definition of %s\n", linenumber, mempos>>16, mempos&0xFFFF, name);
-		return;
+		printLocation();
+		printf("\nError: Second definition of %s\n", name);
 	}
 
 	void errorInconsistentData(int romdata, int asmdata) {
-		printf("Error(%d)(%02X:%04X): Data ($%02X) is inconsistent with ROM data ($%02X)\n", linenumber, mempos>>16, mempos&0xFFFF, asmdata, romdata);
-		return;
+		printLocation();
+		printf("\nError: Data ($%02X) is inconsistent with ROM data ($%02X)\n", asmdata, romdata);
 	}
-
-	void errorInconsistentDataOpcode(int romdata, int asmdata) {
-		printf("Error(%d)(%02X:%04X): Opcode ($%02X) is inconsistent with ROM data ($%02X)\n", linenumber, mempos>>16, mempos&0xFFFF, asmdata, romdata);
-		return;
+	
+	void printArgument(char* buffer, enum asmarg arg, unsigned int argcontent) {
+		switch(arg) {
+		case NO:
+			buffer[0] = '\0';
+			break;
+		case n8:
+			sprintf(buffer, "$%02X", (unsigned char) argcontent);
+			break;
+		case e8:
+			sprintf(buffer, "$%04X", ((signed char) argcontent) + ((mempos&0xFFFF)+2));
+			break;
+		case m_a8:
+			sprintf(buffer, "[$FF%02X]", (unsigned char) argcontent);
+			break;
+		case SPe8:
+			sprintf(buffer, "sp %s $%02X", 
+				((signed char) argcontent) < 0 ? "-" : "+",
+				((signed char) argcontent) < 0 ? ((unsigned char) argcontent) : -((unsigned char) argcontent));
+			break;
+		case n16:
+			sprintf(buffer, "$%04X", argcontent);
+			break;
+		case m_a16:
+			sprintf(buffer, "[$%04X]", argcontent);
+			break;
+		default:
+			strcpy(buffer, OPCODEARGS[arg]);
+			break;
+		}
 	}
-
+	
+	void suggestLabel(char* buffer, enum asmarg arg1, enum asmarg arg2, unsigned int argcontent) {
+		unsigned int address = 0;
+		
+		switch(arg1) {
+		case e8:
+			address = ((signed char) argcontent) + ((mempos&0xFFFF)+2);
+			break;
+		case m_a8:
+			address = (argcontent&0xFF) | 0xFF00;
+			break;
+		case n16:
+			address = argcontent & 0xFFFF;
+			break;
+		case m_a16:
+			address = argcontent & 0xFFFF;
+			break;
+		}
+		
+		switch(arg2) {
+		case e8:
+			address = ((signed char) argcontent) + ((mempos&0xFFFF)+2);
+			break;
+		case m_a8:
+			address = (argcontent&0xFF) | 0xFF00;
+			break;
+		case n16:
+			address = argcontent & 0xFFFF;
+			break;
+		case m_a16:
+			address = argcontent & 0xFFFF;
+			break;
+		}
+		
+		if(address == 0) return;
+		
+		for(unsigned int i = 0; i < labelcount; i++) {
+			if((address | (address < 0x4000 ? 0 : (mempos & 0xFF0000))) == labels(i).value & (address < 0x4000 ? 0xFFFF : 0xFFFFFF)) {
+				sprintf(buffer, " (\"%s\"?)", labels(i).name);
+				return;
+			}
+		}
+		
+		for(unsigned int i = 0; i < assumptioncount; i++) {
+			if((address&0xFF) == asmpts(i).valuel && asmpts(i).l && ((address>>8)&0xFF) == asmpts(i).valuem && asmpts(i).m) {
+				sprintf(buffer, " (\"%s\"?)", asmpts(i).name);
+				return;
+			}
+		}
+	}
+	
+	void errorInconsistentDataInstruction(enum asmopcode asmopcode, enum asmarg asmarg1, enum asmarg asmarg2, unsigned int asmargcontent,
+	                                      enum asmopcode romopcode, enum asmarg romarg1, enum asmarg romarg2, unsigned int romargcontent) {
+		printLocation();
+		char asminstruction[32];
+		strcpy(asminstruction, OPCODES[asmopcode]);
+		if(asmarg1 != NO) strcat(asminstruction, " ");
+		printArgument(&asminstruction[strlen(asminstruction)], asmarg1, asmargcontent);
+		if(asmarg2 != NO) strcat(asminstruction, ", ");
+		printArgument(&asminstruction[strlen(asminstruction)], asmarg2, asmargcontent);
+		
+		char rominstruction[32];
+		char romsuggestion[256];
+		romsuggestion[0] = '\0';
+		strcpy(rominstruction, OPCODES[romopcode]);
+		if(romarg1 != NO) strcat(rominstruction, " ");
+		printArgument(&rominstruction[strlen(rominstruction)], romarg1, romargcontent);
+		if(romarg2 != NO) strcat(rominstruction, ", ");
+		printArgument(&rominstruction[strlen(rominstruction)], romarg2, romargcontent);
+		suggestLabel(romsuggestion, romarg1, romarg2, romargcontent);
+		
+		printf("\nError: Instruction \'%s\' is inconsistent with ROM data \'%s\'%s\n", asminstruction, rominstruction, romsuggestion);
+	}
+	
 	void errorInconsistentDataFirstarg(int romdata, int asmdata) {
-		printf("Error(%d)(%02X:%04X): First argument ($%02X) is inconsistent with ROM data ($%02X)\n", linenumber, mempos>>16, mempos&0xFFFF, asmdata, romdata);
-		return;
+		printLocation();
+		printf("\nError: First argument ($%02X) is inconsistent with ROM data ($%02X)\n", asmdata, romdata);
 	}
 
 	void errorInconsistentDataSecondarg(int romdata, int asmdata) {
-		printf("Error(%d)(%02X:%04X): Second argument ($%02X) is inconsistent with ROM data ($%02X)\n", linenumber, mempos>>16, mempos&0xFFFF, asmdata, romdata);
-		return;
+		printLocation();
+		printf("\nError: Second argument ($%02X) is inconsistent with ROM data ($%02X)\n", asmdata, romdata);
 	}
 
-	void errorUnknownInstruction(enum asmopcode opcode, enum opcodearg arg1, enum opcodearg arg2) {
-		if(arg1 == NO) printf("Error(%d)(%02X:%04X): Unknown instruction %s\n", linenumber, mempos>>16, mempos&0xFFFF, OPCODE_STRINGS[opcode]);
-		else if(arg2 == NO) printf("Error(%d)(%02X:%04X): Unknown instruction %s %s\n", linenumber, mempos>>16, mempos&0xFFFF, OPCODE_STRINGS[opcode], OPCODEARG_STRINGS[arg1]);
-		else printf("Error(%d)(%02X:%04X): Unknown instruction %s %s, %s\n", linenumber, mempos>>16, mempos&0xFFFF,
-			OPCODE_STRINGS[opcode], OPCODEARG_STRINGS[arg1], OPCODEARG_STRINGS[arg2]);
+	void errorUnknownInstruction(enum asmopcode opcode, enum asmarg arg1, enum asmarg arg2) {
+		printLocation();
+		if(arg1 == NO) printf("\nError: Unknown instruction %s\n", OPCODES[opcode]);
+		else if(arg2 == NO) printf("\nError: Unknown instruction %s %s\n", OPCODES[opcode], OPCODEARGS[arg1]);
+		else printf("\nError: Unknown instruction %s %s, %s\n", OPCODES[opcode], OPCODEARGS[arg1], OPCODEARGS[arg2]);
 	}
 	
 	void errorUnbalancedParentheses() {
-		printf("Error(%d)(%02X:%04X): Unbalanced parentheses\n", linenumber, mempos>>16, mempos&0xFFFF);
-	}
-	
-	void errorUnrecordedSymbol(char* symbol) {
-		printf("Error(%d)(%02X:%04X): Unrecorded symbol %s\n", linenumber, mempos>>16, mempos&0xFFFF, symbol);
+		printLocation();
+		printf("\nError: Unbalanced parentheses\n");
 	}
 	
 	void errorFail(char* failure) {
-		printf("Failure(%d)(%02X:%04X): %s\n", linenumber, mempos>>16, mempos&0xFFFF, failure);
+		printLocation();
+		printf("\nFailure: %s\n", failure);
 	}
 	
 	void errorWarn(char* warning) {
-		printf("Warning(%d)(%02X:%04X): %s\n", linenumber, mempos>>16, mempos&0xFFFF, warning);
+		printLocation();
+		printf("\nWarning: %s\n", warning);
 	}
 	
 	void errorAssert() {
-		printf("Failure(%d)(%02X:%04X): Assertion failed\n", linenumber, mempos>>16, mempos&0xFFFF);
+		printLocation();
+		printf("\nFailure: Assertion failed\n");
 	}
 	
 	void errorAssertWithMessage(char* message) {
-		printf("Failure(%d)(%02X:%04X): %s\n", linenumber, mempos>>16, mempos&0xFFFF, message);
+		printf("\nFailure(%d)(%02X:%04X): %s\n", message);
 	}
 	
 	void errorSectionCannotContainData() {
-		printf("Error(%d)(%02X:%04X): Section cannot contain code or data\n", linenumber, mempos>>16, mempos&0xFFFF);
+		printLocation();
+		printf("\nError: Section cannot contain code or data\n");
 	}
 	
 	void errorLabelCannotExistOutsideOfSection() {
-		printf("Error(%d)(%02X:%04X): Label cannot exist outside of a section\n", linenumber, mempos>>16, mempos&0xFFFF);
+		printLocation();
+		printf("\nError: Label cannot exist outside of a section\n");
 	}
 	
 	void errorDataCannotExistOutsideOfSection() {
-		printf("Error(%d)(%02X:%04X): Code or data cannot exist outside of a section\n", linenumber, mempos>>16, mempos&0xFFFF);
+		printLocation();
+		printf("\nError: Code or data cannot exist outside of a section\n");
 	}
 	
 	void errorIncorrectRegion(enum asmregiontype currentregion, enum asmregiontype expectedregion) {
-		printf("Error(%d)(%02X:%04X): Section assigned to %s, expected %s\n", linenumber, mempos>>16, mempos&0xFFFF, REGION_STRINGS[currentregion], REGION_STRINGS[expectedregion]);
+		printLocation();
+		printf("\nError: Section assigned to %s, expected %s\n", REGIONS[currentregion], REGIONS[expectedregion]);
 	}
 	
 	void errorSectionNotFound(char* section) {
-		printf("Error: Section \"%s\" was not found\n", section);
+		printf("\nError: Section \"%s\" was not found\n", section);
 	}
 	
 	void errorReptWithoutEndr() {
-		printf("Error(%d)(%02X:%04X): REPT declared without matching ENDR\n", linenumber, mempos>>16, mempos&0xFFFF);
+		printLocation();
+		printf("\nError: REPT declared without matching ENDR\n");
 	}
 	
 	void errorUnionWithoutEndu() {
-		printf("Error(%d)(%02X:%04X): UNION declared without matching ENDU\n", linenumber, mempos>>16, mempos&0xFFFF);
+		printLocation();
+		printf("\nError: UNION declared without matching ENDU\n");
+	}
+	
+	void errorUnableToCalculate() {
+		printLocation();
+		printf("\nError: Unable to calculate expression\n");
+	}
+	
+	void errorRedefinitionOfConstant(struct constant constant) {
+		printLocation();
+		printf("\nError: Redefinition of constant %s\n", constant.name);
 	}
 
 
@@ -1092,7 +1297,7 @@ void saveAsmPos() {
 	savedcurrentmacropos = currentmacropos;
 	for(unsigned int i = 0; i < expandedstrcount; i++) savedexpandedstrspos[i] = expandedstrspos[i];
 	savedexpandedstrcount = expandedstrcount;
-	for(unsigned int i = 0; i < savedungottencharcount; i++) savedungottenchars[i] = ungottenchars[i];
+	for(unsigned int i = 0; i < ungottencharcount; i++) savedungottenchars[i] = ungottenchars[i];
 	savedungottencharcount = ungottencharcount;
 }
 
@@ -1102,7 +1307,7 @@ void restoreAsmPos() {
 	currentmacropos = savedcurrentmacropos;
 	for(unsigned int i = 0; i < savedexpandedstrcount; i++) expandedstrspos[i] = savedexpandedstrspos[i];
 	expandedstrcount = savedexpandedstrcount;
-	for(unsigned int i = 0; i < ungottencharcount; i++) ungottenchars[i] = savedungottenchars[i];
+	for(unsigned int i = 0; i < savedungottencharcount; i++) ungottenchars[i] = savedungottenchars[i];
 	ungottencharcount = savedungottencharcount;
 }
 
@@ -1149,32 +1354,30 @@ void numToBracestr(unsigned long value, char sign, bool exact, bool align, bool 
 		break;
 	}
 	
-	unsigned int valuedigit = 0;
-	while(width > 0 || value != 0 || valuedigit != 0) {
-		unsigned long digit = 1;
-		if(!align) {
-			for(unsigned int ii = 1; ii < width; ii++) {
-				digit *= base;
-			}
-		}
-		if(value >= digit) {
-			while(value >= digit*base) {
-				if(digit * base == 0) break;
-				digit *= base;
-			}
-			bracestr[i++] = (value / digit) + '0';
+	unsigned long digit = 1;
+	bool invalue = false;
+	if(!align) for(unsigned int ii = 1; ii < width; ii++) digit *= base;
+	else if(value == 0) {
+		bracestr[i++] == '0';
+		if(width != 0) width--;
+	}
+	while(value >= digit * base) {
+		if(digit * base == 0) break;
+		digit *= base;
+	}
+	while(width > 0 || value != 0 || digit != 0) {
+		if(value >= digit) invalue = true;
+		if(invalue) {
+			bracestr[i++] = (value / digit) < 10 ? ((value / digit) + '0') : ((value / digit) + 'A'-10);
 			value = value % digit;
-			valuedigit = digit;
-		} else if(valuedigit != 0) {
-			bracestr[i++] = '0';
-		} else {
-			bracestr[i++] = padchar;
-		}
-		if(valuedigit != 0) valuedigit /= base;
+			if(value == 0 && digit == 0) invalue = false;
+		} else if(!align && value == 0 && digit <= 1) bracestr[i++] = '0';
+		else bracestr[i++] = padchar;
+		digit /= base;
 		if(width != 0) width--;
 	}
 	
-	// frac, prec, and fixed-point types are unused
+	// frac, prec, and fixed-point types are unimplemented
 	
 	bracestr[i] = '\0';
 	
@@ -1212,8 +1415,6 @@ char getNextChar() {
 	if(!charisliteral) {
 		if(c == '{') {
 		// interpolate symbol
-			bool wasinstring = instring;
-			instring = false;
 			char symbol[1024];
 			unsigned int i = 0;
 			char sign = 0;
@@ -1230,10 +1431,15 @@ char getNextChar() {
 			unsigned int savedexpandedstrcount = expandedstrcount;
 			unsigned int savedexpandedstrspos[1024];
 			for(unsigned int ii = 0; ii < expandedstrcount; ii++) savedexpandedstrspos[ii] = expandedstrspos[ii];
-
+			
+			unsigned int uniqueaffixpos = 256;
+			unsigned int uniqueaffixorig = 256;
 			symbol[i] = getNextChar();
 			while(symbol[i] != '}') {
-				if(symbol[i] == '\n' || symbol[i] == ';') break;
+				if(symbol[i] == '\n' || symbol[i] == ';') {
+					symbol[0] = '\0';
+					break;
+				}
 				if(symbol[i] == ':') {
 					i = 0;
 					if(symbol[i] == '+' | symbol[i] == ' ') { sign = symbol[i++]; }
@@ -1252,6 +1458,19 @@ char getNextChar() {
 					symbol[i] = getNextChar();
 					continue;
 				}
+				if(symbol[i] == '\\') {
+					symbol[i] = getNextChar();
+					if(symbol[i] == '@') {
+						uniqueaffixorig = i;
+						symbol[i]   = '2';
+						symbol[++i] = '5';
+						symbol[++i] = '6';
+						uniqueaffixpos = i;
+					} else {
+						ungetChar(symbol[i]);
+						symbol[i] = '\\';
+					}
+				}
 				symbol[++i] = getNextChar();
 			}
 			symbol[i] = '\0';
@@ -1259,41 +1478,69 @@ char getNextChar() {
 			if(strcmp(repeatsymbol, symbol) == 0) {
 				numToBracestr(repeatcount, sign, exact, align, pad, width, frac, prec, type);
 				c = getNextChar();
-				instring = wasinstring;
 				return c;
 			}
 			
-			for(unsigned int ii = 0; ii < labelcount; ii++) if(strcmp(symbol, labels(ii).name) == 0) {
-				numToBracestr(labels(ii).value, sign, exact, align, pad, width, frac, prec, type);
-				c = getNextChar();
-				instring = wasinstring;
-				return c;
-			}
-			
-			for(unsigned int ii = 0; ii < constantcount; ii++) if(strcmp(symbol, consts(ii).name) == 0) {
-				numToBracestr(consts(ii).value, sign, exact, align, pad, width, frac, prec, type);
-				c = getNextChar();
-				instring = wasinstring;
-				return c;
-			}
-			
-			for(unsigned int ii = 0; ii < variablecount; ii++) if(strcmp(symbol, varbls(ii).name) == 0) {
-				numToBracestr(varbls(ii).value, sign, exact, align, pad, width, frac, prec, type);
-				c = getNextChar();
-				instring = wasinstring;
-				return c;
-			}
-			
-			for(unsigned int ii = 0; ii < conststrcount; ii++) if(strcmp(symbol, costrs(ii).name) == 0) {
-				expandedstrs[expandedstrcount] = malloc(strlen(costrs(ii).content)+1 + ungottencharcount);
-				strcpy(expandedstrs[expandedstrcount], costrs(ii).content);
-				strncat(expandedstrs[expandedstrcount], ungottenchars, ungottencharcount);
-				ungottencharcount = 0;
+			if(strcmp(symbol, ".") == 0) {
+				expandedstrs[expandedstrcount] = malloc(strlen(labelscope)+1);
+				strcpy(expandedstrs[expandedstrcount], labelscope);
 				expandedstrspos[expandedstrcount] = 0;
 				expandedstrcount++;
-				c = getNextChar();
-				instring = wasinstring;
-				return c;
+				return getNextChar();
+			}
+			
+			if(strcmp(symbol, "..") == 0) {
+				expandedstrs[expandedstrcount] = malloc(strlen(locallabelscope)+1);
+				strcpy(expandedstrs[expandedstrcount], locallabelscope);
+				expandedstrspos[expandedstrcount] = 0;
+				expandedstrcount++;
+				return getNextChar();
+			}
+			
+			while(true) {
+				if(uniqueaffixpos < 256) {
+					symbol[uniqueaffixpos]--;
+					unsigned int underflowto = uniqueaffixpos;
+					while(symbol[underflowto] == '0'-1) {
+						symbol[underflowto] = '9';
+						symbol[--underflowto]--;
+						if(underflowto == uniqueaffixorig && symbol[underflowto] == '0') {
+							for(unsigned int ii = uniqueaffixorig; ii < i; ii++) symbol[ii] = symbol[ii+1];
+							uniqueaffixpos--;
+							i--;
+						}
+					}
+					if(uniqueaffixpos < uniqueaffixorig) break;
+				}
+				
+				for(unsigned int ii = 0; ii < labelcount; ii++) if(strcmp(symbol, labels(ii).name) == 0) {
+					numToBracestr(labels(ii).value & 0xFFFF, sign, exact, align, pad, width, frac, prec, type);
+					c = getNextChar();
+					return c;
+				}
+				
+				for(unsigned int ii = 0; ii < constantcount; ii++) if(strcmp(symbol, consts(ii).name) == 0) {
+					numToBracestr(consts(ii).value, sign, exact, align, pad, width, frac, prec, type);
+					c = getNextChar();
+					return c;
+				}
+				
+				for(unsigned int ii = 0; ii < variablecount; ii++) if(strcmp(symbol, varbls(ii).name) == 0) {
+					numToBracestr(varbls(ii).value, sign, exact, align, pad, width, frac, prec, type);
+					c = getNextChar();
+					return c;
+				}
+				
+				for(unsigned int ii = 0; ii < conststrcount; ii++) if(strcmp(symbol, costrs(ii).name) == 0) {
+					expandedstrs[expandedstrcount] = malloc(strlen(costrs(ii).content)+1);
+					strcpy(expandedstrs[expandedstrcount], costrs(ii).content);
+					expandedstrspos[expandedstrcount] = 0;
+					expandedstrcount++;
+					c = getNextChar();
+					return c;
+				}
+				
+				if(uniqueaffixpos >= 256 || (uniqueaffixpos == uniqueaffixorig && symbol[uniqueaffixpos] == '0')) break;
 			}
 			
 			fseek(asmfile, savedasmfilepos, SEEK_SET);
@@ -1304,23 +1551,63 @@ char getNextChar() {
 		}
 		
 		
-		else if(c == '\\' && !instring) {
+		else if(c == '\\') {
 			long savedasmfilepos = ftell(asmfile);
 			unsigned int savedcurrentmacropos = currentmacropos;
 			unsigned int savedexpandedstrcount = expandedstrcount;
-			unsigned int savedexpandedstrspos[1024];
+			unsigned int savedexpandedstrspos[64];
 			for(unsigned int ii = 0; ii < expandedstrcount; ii++) savedexpandedstrspos[ii] = expandedstrspos[ii];
 			
 			char n = getNextChar();
+			
+			if(n == '#') {
+				if(_NARG == 0) return 18;
+				unsigned int ii = 0;
+				for(unsigned int i = 0; i < _NARG; i++) ii += strlen(currentargs[i]) + 1;
+				expandedstrs[expandedstrcount] = malloc(ii);
+				ii = 0;
+				for(unsigned int i = 0; i < _NARG; i++) {
+					strcpy(&expandedstrs[expandedstrcount][ii], currentargs[i]);
+					ii += strlen(currentargs[i]);
+					expandedstrs[expandedstrcount][ii++] = ',';
+				}
+				expandedstrs[expandedstrcount][ii-1] = '\0';
+				expandedstrspos[expandedstrcount] = 0;
+				expandedstrcount++;
+				return getNextChar();
+			}
+			
+			// if(n == '@') {
+			// 	expandedstrs[expandedstrcount] = malloc(6);
+			// 	sprintf(expandedstrs[expandedstrcount], "%d", uniquesymbolaffix);
+			// 	expandedstrspos[expandedstrcount] = 0;
+			// 	expandedstrcount++;
+			// 	return getNextChar();
+			// }
+			
 			unsigned int argnum = 0;
 			if(n >= '1' && n <= '9') argnum = n - '0';
 			else if(n == '<') {
-				for(n = getNextChar(); n != '>'; n = getNextChar()) {
-					argnum *= 10;
-					argnum += n - '0';
+				char argnumstr[64];
+				unsigned int i = 0;
+				argnumstr[i] = getNextChar();
+				while(argnumstr[i] != '>') argnumstr[++i] = getNextChar();
+				argnumstr[i] = '\0';
+				if(argnumstr[0] >= '0' && argnumstr[0] <= '9') {
+					for(i = 0; argnumstr[i] != '\0'; i++) {
+						argnum *= 10;
+						argnum += argnumstr[i] - '0';
+					}
+				} else {
+					if(strcmp(argnumstr, repeatsymbol) == 0) { argnum = repeatcount; goto argnumfound; }
+					for(i = 0; i < PREDEFS_COUNT; i++) if(strcmp(argnumstr, PREDEFS[i]) == 0) { argnum = predeclaredsymbols[i]; goto argnumfound; }
+					for(i = 0; i < variablecount; i++)   if(strcmp(argnumstr, varbls(i).name) == 0) { argnum = varbls(i).value; goto argnumfound; }
+					for(i = 0; i < labelcount; i++)      if(strcmp(argnumstr, labels(i).name) == 0) { argnum = labels(i).value; goto argnumfound; }
+					for(i = 0; i < constantcount; i++)   if(strcmp(argnumstr, consts(i).name) == 0) { argnum = consts(i).value; goto argnumfound; }
+					for(i = 0; i < assumptioncount; i++) if(strcmp(argnumstr, asmpts(i).name) == 0) { argnum = asmpts(i).valuel | asmpts(i).valuem | asmpts(i).valueh; goto argnumfound; }
 				}
-				ungetChar(n);
-			}
+				
+			} argnumfound:
 			if(argnum > 0 && _NARG >= argnum) {
 				expandedstrs[expandedstrcount] = malloc(strlen(currentargs[argnum-1])+1 + ungottencharcount);
 				strcpy(expandedstrs[expandedstrcount], currentargs[argnum-1]);
@@ -1329,31 +1616,28 @@ char getNextChar() {
 				expandedstrspos[expandedstrcount] = 0;
 				expandedstrcount++;
 				return getNextChar();
-			} else {
-				fseek(asmfile, savedasmfilepos, SEEK_SET);
-				currentmacropos = savedcurrentmacropos;
-				expandedstrcount = savedexpandedstrcount;
-				for(unsigned int ii = 0; ii < savedexpandedstrcount; ii++) expandedstrspos[ii] = savedexpandedstrspos[ii];
-				while(isWhitespace(n)) n = getNextChar();
-				if(n == ';') {
-					bool wascharliteral = charisliteral;
-					charisliteral = true;
-					while(getNextChar() != '\n') continue;
-					charisliteral = wascharliteral;
-					if(currentmacro == 0) linenumber++;
-					return getNextChar();
-				}
-				if(n == '\n') {
-					if(currentmacro == 0) linenumber++;
-					return getNextChar();
-				}
-				
-				fseek(asmfile, savedasmfilepos, SEEK_SET);
-				currentmacropos = savedcurrentmacropos;
-				expandedstrcount = savedexpandedstrcount;
-				for(unsigned int ii = 0; ii < savedexpandedstrcount; ii++) expandedstrspos[ii] = savedexpandedstrspos[ii];
-				return '\\';
 			}
+			
+			while(isWhitespace(n)) n = getNextChar();
+			if(n == ';') {
+				bool wascharliteral = charisliteral;
+				charisliteral = true;
+				while(getNextChar() != '\n') continue;
+				charisliteral = wascharliteral;
+				if(currentmacro == 0) linenumber++;
+				return getNextChar();
+			}
+			if(n == '\n') {
+				if(currentmacro == 0) linenumber++;
+				char cc = getNextChar();
+				return cc;
+			}
+			
+			fseek(asmfile, savedasmfilepos, SEEK_SET);
+			currentmacropos = savedcurrentmacropos;
+			expandedstrcount = savedexpandedstrcount;
+			for(unsigned int ii = 0; ii < savedexpandedstrcount; ii++) expandedstrspos[ii] = savedexpandedstrspos[ii];
+			return '\\';
 		}
 	}
 	
@@ -1363,12 +1647,12 @@ char getNextChar() {
 
 enum asmopcode identifyOpcode(char* token) {
 	enum asmopcode opcode;
-	for(opcode = 0; opcode < OPCODE_STRINGS_COUNT; opcode++) {
+	for(opcode = 0; opcode < OPCODES_COUNT; opcode++) {
 		int i;
-		for(i = 0; token[i] != '\0' && OPCODE_STRINGS[opcode][i] != '\0'; i++) {
-			if(token[i] != OPCODE_STRINGS[opcode][i] && token[i]-'A'+'a' != OPCODE_STRINGS[opcode][i]) break;
+		for(i = 0; token[i] != '\0' && OPCODES[opcode][i] != '\0'; i++) {
+			if(token[i] != OPCODES[opcode][i] && token[i]-'A'+'a' != OPCODES[opcode][i]) break;
 		}
-		if(token[i] == '\0' && OPCODE_STRINGS[opcode][i] == '\0') return opcode;
+		if(token[i] == '\0' && OPCODES[opcode][i] == '\0') return opcode;
 	}
 	
 	return INVALID_OPCODE;
@@ -1376,12 +1660,12 @@ enum asmopcode identifyOpcode(char* token) {
 
 enum asmdirective identifyDirective(char* token) {
 	enum asmdirective directive;
-	for(directive = 0; directive < DIRECTIVE_STRINGS_COUNT; directive++) {
+	for(directive = 0; directive < DIRECTIVES_COUNT; directive++) {
 		int i;
-		for(i = 0; token[i] != '\0' && DIRECTIVE_STRINGS[directive][i] != '\0'; i++) {
-			if(token[i] != DIRECTIVE_STRINGS[directive][i] && token[i]-'a'+'A' != DIRECTIVE_STRINGS[directive][i]) break;
+		for(i = 0; token[i] != '\0' && DIRECTIVES[directive][i] != '\0'; i++) {
+			if(token[i] != DIRECTIVES[directive][i] && token[i]-'a'+'A' != DIRECTIVES[directive][i]) break;
 		}
-		if(token[i] == '\0' && DIRECTIVE_STRINGS[directive][i] == '\0') return directive;
+		if(token[i] == '\0' && DIRECTIVES[directive][i] == '\0') return directive;
 	}
 	
 	return INVALID_DIRECTIVE;
@@ -1389,12 +1673,12 @@ enum asmdirective identifyDirective(char* token) {
 
 enum asmregiontype identifyRegiontype(char* token) {
 	enum asmregiontype type;
-	for(type = 0; type < REGION_STRINGS_COUNT; type++) {
+	for(type = 0; type < REGIONS_COUNT; type++) {
 		int i;
-		for(i = 0; token[i] != '\0' && REGION_STRINGS[type][i] != '\0'; i++) {
-			if(token[i] != REGION_STRINGS[type][i] && token[i]-'a'+'A' != REGION_STRINGS[type][i]) break;
+		for(i = 0; token[i] != '\0' && REGIONS[type][i] != '\0'; i++) {
+			if(token[i] != REGIONS[type][i] && token[i]-'a'+'A' != REGIONS[type][i]) break;
 		}
-		if(token[i] == '\0' && REGION_STRINGS[type][i] == '\0') return type;
+		if(token[i] == '\0' && REGIONS[type][i] == '\0') return type;
 	}
 	
 	return INVALID_REGION_TYPE;
@@ -1402,12 +1686,12 @@ enum asmregiontype identifyRegiontype(char* token) {
 
 enum asmdirective identifyPredef(char* token) {
 	enum asmpredef predef;
-	for(predef = 0; predef < PREDEF_STRINGS_COUNT; predef++) {
+	for(predef = 0; predef < PREDEFS_COUNT; predef++) {
 		int i;
-		for(i = 0; token[i] != '\0' && PREDEF_STRINGS[predef][i] != '\0'; i++) {
-			if(token[i] != PREDEF_STRINGS[predef][i]) break;
+		for(i = 0; token[i] != '\0' && PREDEFS[predef][i] != '\0'; i++) {
+			if(token[i] != PREDEFS[predef][i]) break;
 		}
-		if(token[i] == '\0' && PREDEF_STRINGS[predef][i] == '\0') return predef;
+		if(token[i] == '\0' && PREDEFS[predef][i] == '\0') return predef;
 	}
 	
 	return INVALID_PREDEF;
@@ -1415,12 +1699,12 @@ enum asmdirective identifyPredef(char* token) {
 
 enum asmregister identifyRegister(char* token) {
 	enum asmregister reg;
-	for(reg = 0; reg < REGISTER_STRINGS_COUNT; reg++) {
+	for(reg = 0; reg < REGISTERS_COUNT; reg++) {
 		int i;
-		for(i = 0; token[i] != '\0' && REGISTER_STRINGS[reg][i] != '\0'; i++) {
-			if(token[i] != REGISTER_STRINGS[reg][i] && token[i]-'A'+'a' != REGISTER_STRINGS[reg][i]) break;
+		for(i = 0; token[i] != '\0' && REGISTERS[reg][i] != '\0'; i++) {
+			if(token[i] != REGISTERS[reg][i] && token[i]-'A'+'a' != REGISTERS[reg][i]) break;
 		}
-		if(token[i] == '\0' && REGISTER_STRINGS[reg][i] == '\0') return reg;
+		if(token[i] == '\0' && REGISTERS[reg][i] == '\0') return reg;
 	}
 	
 	return INVALID_REGISTER;
@@ -1428,12 +1712,12 @@ enum asmregister identifyRegister(char* token) {
 
 enum asmcondition identifyCondition(char* token) {
 	enum asmcondition condition;
-	for(condition = 0; condition < CC_STRINGS_COUNT; condition++) {
+	for(condition = 0; condition < CCS_COUNT; condition++) {
 		int i;
-		for(i = 0; token[i] != '\0' && CC_STRINGS[condition][i] != '\0'; i++) {
-			if(token[i] != CC_STRINGS[condition][i] && token[i]-'A'+'a' != CC_STRINGS[condition][i]) break;
+		for(i = 0; token[i] != '\0' && CCS[condition][i] != '\0'; i++) {
+			if(token[i] != CCS[condition][i] && token[i]-'A'+'a' != CCS[condition][i]) break;
 		}
-		if(token[i] == '\0' && CC_STRINGS[condition][i] == '\0') return condition;
+		if(token[i] == '\0' && CCS[condition][i] == '\0') return condition;
 	}
 	
 	return INVALID_CONDITION;
@@ -1446,9 +1730,7 @@ struct token identifyNextToken() {
 	token[i] = getNextChar();
 	
 	// cross whitespace
-	while(isWhitespace(token[i])) {
-		token[i] = getNextChar();
-	}
+	while(isWhitespace(token[i])) token[i] = getNextChar();
 	
 	// identify end
 	if(token[i] == '\0') return (struct token) { .type = END_OF_FILE };
@@ -1495,15 +1777,56 @@ struct token identifyNextToken() {
 	}
 	if(isValidSymbolFirstChar(token[0])) {
 		if(token[i] == '.' && !charisliteral) {
-			strcpy(&token[i], labelscope);
-			i += strlen(labelscope);
-			token[i] = '.';
-			lastsymbolislocal = true;
-		} else lastsymbolislocal = false;
-		while(isValidSymbolChar(token[i])) token[++i] = getNextChar();
+			token[++i] = getNextChar();
+			if(token[i] == '.') {
+				strcpy(&token[--i], locallabelscope);
+				i += strlen(locallabelscope);
+			} else {
+				ungetChar(token[i--]);
+				strcpy(&token[i], labelscope);
+				i += strlen(labelscope);
+			}
+			token[i] = getNextChar();
+			if(isValidSymbolChar(token[i])) {
+				token[i+1] = token[i];
+				token[i++] = '.';
+			} else ungetChar(token[i--]);
+		}
+		unsigned int uniqueaffixpos = 256;
+		while(isValidSymbolChar(token[i])) {
+			token[++i] = getNextChar();
+			if(token[i] == '\\') {
+				token[i] = getNextChar();
+				if(token[i] == '@') {
+					uniqueaffixpos = i;
+					continue;
+				}
+				else {
+					ungetChar(token[i]);
+					token[i] = '\\';
+				}
+			}
+		}
 		ungetChar(token[i--]);
-		token[i+1] = '\0';
+		token[++i] = '\0';
 		
+		unsigned int uniqueaffixorig = uniqueaffixpos;
+		if(uniqueaffixpos < 256) {
+			if(firsttoken || indef) {
+				token[uniqueaffixpos] = '0' - 1;
+				newuniqueaffix = false;
+			} else if(newuniqueaffix) {
+				token[uniqueaffixpos] = '0' - 1;
+			} else {
+				uniqueaffixpos += 2;
+				i += 2;
+				for(unsigned int ii = i; ii > uniqueaffixpos; ii--) token[ii] = token[ii - 2];
+				token[uniqueaffixpos-2] = '2';
+				token[uniqueaffixpos-1] = '5';
+				token[uniqueaffixpos]   = '6';
+			}
+		}
+			
 		// identify repeatsymbol
 		if(strcmp(token, repeatsymbol) == 0) return (struct token) { .type = NUMBER, .content = repeatcount };
 		
@@ -1513,45 +1836,92 @@ struct token identifyNextToken() {
 		
 		// identify predefined symbol
 		enum asmpredef predef = identifyPredef(token);
-		if(predef != INVALID_PREDEF) return (struct token) { .type = PREDECLARED_SYMBOL, .content = predef };
+		if(predef != INVALID_PREDEF) return (struct token) { .type = NUMBER, .content = predeclaredsymbols[predef] };
 		
-		// identify variable
-		for(unsigned int ii = 0; ii < variablecount; ii++) {
-			if(strcmp(token, varbls(ii).name) == 0) return (struct token) { .type = VARIABLE, .content = ii };
-		}
+		// identify text macro
+		if(strcmp(token, "text_far") == 0) return (struct token) { .type = TEXT_MACRO };
 		
-		// identify label
-		for(unsigned int ii = 0; ii < labelcount; ii++) {
-			if(strcmp(token, labels(ii).name) == 0) return (struct token) { .type = LABEL, .content = ii };
-		}
-		
-		// identify constant
-		for(unsigned int ii = 0; ii < constantcount; ii++) {
-			if(strcmp(token, consts(ii).name) == 0) return (struct token) { .type = CONSTANT, .content = ii };
-		}
-		
-		// identify assumption
-		for(unsigned int ii = 0; ii < assumptioncount; ii++) {
-			if(strcmp(token, asmpts(ii).name) == 0) return (struct token) { .type = ASSUMPTION, .content = ii };
-		}
-		
-		// identify macro
-		for(unsigned int ii = 0; ii < macrocount; ii++) {
-			if(strcmp(token, macros(ii).name) == 0) return (struct token) { .type = MACRO, .content = ii };
-		}
-	
-		// identify constant string
-		for(unsigned int ii = 0; ii < conststrcount; ii++) if(strcmp(token, costrs(ii).name) == 0) {
-			if(charisliteral) return (struct token) { .type = CONSTANT_STRING, .content = ii };
+		if(!charisliteral) {
+			while(true) {
+				if(uniqueaffixpos < 256) {
+					if(firsttoken || indef || newuniqueaffix) {
+						token[uniqueaffixpos]++;
+						unsigned int overflowto = uniqueaffixpos;
+						while(token[overflowto] == '9'+1) {
+							token[overflowto] = '0';
+							if(overflowto == uniqueaffixorig) {
+								uniqueaffixpos++;
+								i++;
+								for(unsigned int ii = i; ii > uniqueaffixorig; ii--) token[ii] = token[ii-1];
+								token[uniqueaffixorig] = '1';
+							} else token[--overflowto]++;
+						}
+					} else {
+						token[uniqueaffixpos]--;
+						unsigned int underflowto = uniqueaffixpos;
+						while(token[underflowto] == '0'-1) {
+							token[underflowto] = '9';
+							token[--underflowto]--;
+							if(underflowto == uniqueaffixorig && token[underflowto] == '0') {
+								for(unsigned int ii = uniqueaffixorig; ii < i; ii++) token[ii] = token[ii+1];
+								uniqueaffixpos--;
+								i--;
+							}
+						}
+					}
+				}
+				
+				unsigned int ii;
+				
+				// identify variable
+				for(ii = 0; ii < variablecount; ii++) if(strcmp(token, varbls(ii).name) == 0) {
+					if(!(firsttoken || indef || newuniqueaffix) || uniqueaffixpos >= 256) return (struct token) { .type = VARIABLE, .content = ii };
+					else break;
+				} if(ii < variablecount) continue;
+				
+				// identify label
+				for(ii = 0; ii < labelcount; ii++) if(strcmp(token, labels(ii).name) == 0) {
+					if(!(firsttoken || indef || newuniqueaffix) || uniqueaffixpos >= 256) return (struct token) { .type = LABEL, .content = ii };
+					else break;
+				} if(ii < labelcount) continue;
+				
+				// identify constant
+				for(ii = 0; ii < constantcount; ii++) if(strcmp(token, consts(ii).name) == 0) {
+					if(!(firsttoken || indef || newuniqueaffix) || uniqueaffixpos >= 256) return (struct token) { .type = CONSTANT, .content = ii };
+					else break;
+				} if(ii < constantcount) continue;
+				
+				// identify assumption
+				for(ii = 0; ii < assumptioncount; ii++) if(strcmp(token, asmpts(ii).name) == 0) {
+					if(!(firsttoken || indef || newuniqueaffix) || uniqueaffixpos >= 256) return (struct token) { .type = ASSUMPTION, .content = ii };
+					else break;
+				} if(ii < assumptioncount) continue;
+				
+				// identify macro
+				for(ii = 0; ii < macrocount; ii++) if(strcmp(token, macros(ii).name) == 0) {
+					if(!(firsttoken || indef || newuniqueaffix) || uniqueaffixpos >= 256) return (struct token) { .type = MACRO, .content = ii };
+					else break;
+				} if(ii < macrocount) continue;
 			
-			expandedstrs[expandedstrcount] = malloc(strlen(costrs(ii).content)+1 + ungottencharcount);
-			strcpy(expandedstrs[expandedstrcount], costrs(ii).content);
-			strncat(expandedstrs[expandedstrcount], ungottenchars, ungottencharcount);
-			ungottencharcount = 0;
-			expandedstrspos[expandedstrcount] = 0;
-			expandedstrcount++;
-			struct token returntoken = identifyNextToken();
-			return returntoken;
+				// identify constant string
+				for(ii = 0; ii < conststrcount; ii++) if(strcmp(token, costrs(ii).name) == 0) {
+					if(!(firsttoken || indef || newuniqueaffix) || uniqueaffixpos >= 256) {
+						if(charisliteral || indef) return (struct token) { .type = CONSTANT_STRING, .content = ii };
+						
+						expandedstrs[expandedstrcount] = malloc(strlen(costrs(ii).content)+1 + ungottencharcount);
+						strcpy(expandedstrs[expandedstrcount], costrs(ii).content);
+						strncat(expandedstrs[expandedstrcount], ungottenchars, ungottencharcount);
+						ungottencharcount = 0;
+						expandedstrspos[expandedstrcount] = 0;
+						expandedstrcount++;
+						struct token returntoken = identifyNextToken();
+						return returntoken;
+					}
+					else break;
+				} if(ii < conststrcount) continue;
+				
+				if(uniqueaffixpos >= 256 || firsttoken || indef || newuniqueaffix || (uniqueaffixpos == uniqueaffixorig && token[uniqueaffixpos] == '0')) break;
+			}
 		}
 		
 		// identify new symbol
@@ -1597,13 +1967,15 @@ struct token identifyNextToken() {
 	if(token[i] == '%') {
 		// binary number
 		token[++i] = getNextChar();
-		if(isBin(token[i])) {
+		if(token[i] == bin0 || token[i] == bin1 || token[i] == '_') {
 			unsigned long value = 0;
-			while(isBin(token[i])) {
-				if(isNumber(token[i])) {
+			while(true) {
+				if(token[i] == bin0) {
 					value <<= 1;
-					value += token[i] - '0';
-				}
+				} else if(token[i] == bin1) {
+					value <<= 1;
+					value += 1;
+				} else if(token[i] != '_') break;
 				token[++i] = getNextChar();
 			}
 			ungetChar(token[i--]);
@@ -1651,9 +2023,9 @@ struct token identifyNextToken() {
 		}
 		ungetChar(token[i--]);
 	}
+	
+	// identify string
 	if(token[i] == '\"') {
-		// identify string
-		instring = true;
 		symbolstr[0] = getNextChar();
 		unsigned int ii = 0;
 		while(symbolstr[ii] != '\"') {
@@ -1661,16 +2033,19 @@ struct token identifyNextToken() {
 				bool wascharliteral = charisliteral;
 				charisliteral = true;
 				symbolstr[ii] = getNextChar();
+				if(symbolstr[ii] == '@') {
+					symbolstr[++ii] = '@';
+					symbolstr[ii-1] = '\\';
+				}
 				charisliteral = wascharliteral;
 			}
 			symbolstr[++ii] = getNextChar();
 		}
-		instring = false;
 		symbolstr[ii] = '\0';
 		return (struct token) { .type = STRING, .content = (int) symbolstr };
 	}
 	// identify at
-	if(token[i] == '@') return (struct token) { .type = NUMBER, .content = mempos };
+	if(token[i] == '@') return (struct token) { .type = NUMBER, .content = mempos&0xFFFF };
 	
 	// identify comma
 	if(token[i] == ',') return (struct token) { .type = COMMA };
@@ -1682,31 +2057,31 @@ struct token identifyNextToken() {
 	// identify operator
 	unsigned int matchcount = 0;
 	unsigned int lastmatch;
-	for(unsigned int ii = 0; ii < OPERATOR_STRINGS_COUNT; ii++) {
-		if(token[i] == OPERATOR_STRINGS[ii][0]) {
+	for(unsigned int ii = 0; ii < OPERATORS_COUNT; ii++) {
+		if(token[i] == OPERATORS[ii][0]) {
 			matchcount++;
-			if(strlen(OPERATOR_STRINGS[ii]) == 1) lastmatch = ii;
+			if(strlen(OPERATORS[ii]) == 1) lastmatch = ii;
 		}
 	}
 	if(matchcount > 0) {
 		while(matchcount > 1) {
 			matchcount = 0;
 			token[++i] = getNextChar();
-			for(unsigned int ii = 0; ii < OPERATOR_STRINGS_COUNT; ii++) {
+			for(unsigned int ii = 0; ii < OPERATORS_COUNT; ii++) {
 				unsigned int iii;
 				for(iii = 0; iii <= i; iii++) {
-					if(token[iii] != OPERATOR_STRINGS[ii][iii]) {
+					if(token[iii] != OPERATORS[ii][iii]) {
 						break;
 					}
 				}
 				if(iii > i) {
 					matchcount++;
-					if(iii == strlen(OPERATOR_STRINGS[ii])) lastmatch = ii;
+					if(iii == strlen(OPERATORS[ii])) lastmatch = ii;
 				}
 			}
 		}
 		if(matchcount == 0) {
-			while(i >= strlen(OPERATOR_STRINGS[lastmatch])) ungetChar(token[i--]);
+			while(i >= strlen(OPERATORS[lastmatch])) ungetChar(token[i--]);
 		}
 		return (struct token) { .type = OPERATOR, .content = lastmatch };
 	}
@@ -1717,6 +2092,116 @@ struct token identifyNextToken() {
 	
   if(debug) printf("?%c ", token[0]);
 	return (struct token) { .type = UNKNOWN_TOKEN };
+}
+
+
+
+int recordLabel(char* name) {
+// if(strcmp(name, "SFX_Caught_Mon") == 0) {
+// 	printLocation();
+// 	printf("\n%s is defined as %0X\n", name, mempos);
+// 	return -1;
+// }
+	labels(labelcount) = (struct label) { .name = name, .value = mempos};
+	incrementLabellist;
+}
+
+// int recordAssumptionL(char* name, unsigned char value) {
+// 	unsigned int i;
+// 	for(i = 0; i < assumptionCount; i++) if(strcmp(asmpts(i).name, name) == 0) break;
+	
+// 	if(asmpts[i].l && asmpts[i].valuel != value) {
+// 		errorInconsistentAssumption(name, value, asmpts[i].value);
+// 		return -1;
+// 	}
+	
+// 	asmpts[i].l = true;
+// 	asmpts[i].valuel = value;
+	
+// 	if(i == assumptionCount) {
+// 		asmpts[i].name = malloc(strlen(name)+1);
+// 		strcpy(asmpts[i].name, name);
+// 		assumptioncount++;
+// 		if(assumptioncount % 1024 == 0) assumptionlist[assumptioncount/1024] = malloc(1024 * sizeof(assumptionlist[assumptioncount/1024][0]));
+// 	}
+	
+// 	return 0;
+// }
+
+// int recordAssumptionH(char* name, unsigned char value) {
+// 	unsigned int i;
+// 	for(i = 0; i < assumptionCount; i++) if(strcmp(asmpts(i).name, name) == 0) break;
+	
+// 	if(asmpts[i].h && asmpts[i].valueh != value) {
+// 		errorInconsistentAssumption(name, value, asmpts[i].value);
+// 		return -1;
+// 	}
+	
+// 	asmpts[i].h = true;
+// 	asmpts[i].valueh = value;
+	
+// 	if(i == assumptionCount) {
+// 		asmpts[i].name = malloc(strlen(name)+1);
+// 		strcpy(asmpts[i].name, name);
+// 		assumptioncount++;
+// 		if(assumptioncount % 1024 == 0) assumptionlist[assumptioncount/1024] = malloc(1024 * sizeof(assumptionlist[assumptioncount/1024][0]));
+// 	}
+	
+// 	return 0;
+// }
+
+// int recordAssumptionB(char* name, unsigned char value) {
+// 	unsigned int i;
+// 	for(i = 0; i < assumptionCount; i++) if(strcmp(asmpts(i).name, name) == 0) break;
+	
+// 	if(asmpts[i].b && asmpts[i].valueb != value) {
+// 		errorInconsistentAssumption(name, value, asmpts[i].value);
+// 		return -1;
+// 	}
+	
+// 	asmpts[i].b = true;
+// 	asmpts[i].valueb = value;
+	
+// 	if(i == assumptionCount) {
+// 		asmpts[i].name = malloc(strlen(name)+1);
+// 		strcpy(asmpts[i].name, name);
+// 		assumptioncount++;
+// 		if(assumptioncount % 1024 == 0) assumptionlist[assumptioncount/1024] = malloc(1024 * sizeof(assumptionlist[assumptioncount/1024][0]));
+// 	}
+	
+// 	return 0;
+// }
+
+
+
+
+unsigned char* mapstring(char* string) {
+	unsigned char data[1024];
+	unsigned int datalength = 0;
+	for(unsigned int i = 0; string[i] != '\0';) {
+		unsigned int longestmatch;
+		unsigned int longestmatchlength = 0;
+		for(unsigned int ii = 0; ii < charmapcount; ii++) {
+			for(unsigned int iii = 0; string[i+iii] == charms(ii).chars[iii]; iii++) {
+				if(charms(ii).chars[iii+1] == '\0') {
+					if(iii+1 > longestmatchlength) {
+						longestmatch = ii;
+						longestmatchlength = iii+1;
+					}
+					break;
+				}
+			}
+		}
+		if(longestmatchlength == 0) data[datalength++] = string[i++];
+		else {
+			data[datalength++] = charms(longestmatch).value;
+			i += longestmatchlength;
+		}
+	}
+	unsigned char* returndata = malloc(datalength+1);
+	for(unsigned int i = 0; i < datalength; i++) returndata[i] = data[i];
+	returndata[datalength] = '\0';
+	return returndata;
 }
 
 
@@ -1767,8 +2252,23 @@ int processExpression(struct expressionpart** returnexpression, unsigned int num
 		
 		
 		switch(token.type) {
+		case STRING:
+			expression[i].value = 0;
+			unsigned char* strdata = mapstring((char*)token.content);
+			if(strlen(strdata) > numbits/8) {
+				errorValueTooLarge(numbits);
+				return -1;
+			}
+			for(int ii = strlen(strdata)-1; ii >= 0; ii--) {
+				expression[i].value <<= 8;
+				expression[i].value |= strdata[ii];
+			}
+			free(strdata);
+			break;
+		
+		
 		case LABEL:
-			expression[i].value = labels(token.content).value;
+			expression[i].value = labels(token.content).value & 0xFFFF;
 			break;
 		case CONSTANT:
 			expression[i].value = consts(token.content).value;
@@ -1808,17 +2308,13 @@ int processExpression(struct expressionpart** returnexpression, unsigned int num
 		
 		case DIRECTIVE: {
 			unsigned int dirtype = token.content;
-			token = identifyNextToken();
-			if(token.type != OPERATOR || token.content != OPEN_PARENTHESIS) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextToken(OPERATOR, OPEN_PARENTHESIS);
 			
-			token = identifyNextToken();
 			switch(dirtype) {
 			
 			case DIR_BANK:
 			// determine bank
+				token = identifyNextToken();
 				switch(token.type) {
 				case LABEL:
 					expression[i].value = labels(token.content).value >> 16 & 0xFF;
@@ -1829,6 +2325,7 @@ int processExpression(struct expressionpart** returnexpression, unsigned int num
 						break;
 					}
 				case UNRECORDED_SYMBOL:
+				case STRING:
 					uncalculable = 1;
 					break;
 					
@@ -1838,66 +2335,93 @@ int processExpression(struct expressionpart** returnexpression, unsigned int num
 				}
 				break;
 			
-			case DIR_HIGH:
+			case DIR_HIGH: {
+			// insert (((n) & 0xFF00) >> 8)
+				struct expressionpart* insertion = 0;
+				int procresult = processExpression(&insertion, 24);
+				if(procresult == 1) uncalculable = 1;
+				else if(procresult != 0) return -1;
+				
+				unsigned int highstart = i;
+				expression[i++].operation = OPEN_PARENTHESIS;
+				expression[i++].operation = OPEN_PARENTHESIS;
+				expression[i++].operation = OPEN_PARENTHESIS;
+				for(unsigned int ii = 0; expression[i-1].operation != END_OF_EXPRESSION; ii++) expression[i++] = insertion[ii];
+				free(insertion);
+				expression[i-1].operation = CLOSE_PARENTHESIS;
+				expression[i++].operation = BINARY_AND;
+				expression[i].value = 0xFF00;
+				expression[i++].operation = CLOSE_PARENTHESIS;
+				expression[i++].operation = SHIFT_RIGHT;
+				expression[i].value = 8;
+				expression[i++].operation = CLOSE_PARENTHESIS;
+				for(unsigned int ii = highstart+1; ii < i; ii++) {
+					expression[ii].unknown = false;
+					expression[ii].negative = false;
+					expression[ii].complemented = false;
+					expression[ii].not = false;
+					if(ii - highstart == 2) ii = i - 4;
+				}
+				break;}
+			
+			case DIR_LOW: {
+			// insert ((n) & 0xFF)
+				struct expressionpart* insertion = 0;
+				int procresult = processExpression(&insertion, 24);
+				if(procresult == 1) uncalculable = 1;
+				else if(procresult != 0) return -1;
+				
+				unsigned int lowstart = i;
+				expression[i++].operation = OPEN_PARENTHESIS;
+				expression[i++].operation = OPEN_PARENTHESIS;
+				for(unsigned int ii = 0; expression[i-1].operation != END_OF_EXPRESSION; ii++) expression[i++] = insertion[ii];
+				free(insertion);
+				expression[i-1].operation = CLOSE_PARENTHESIS;
+				expression[i++].operation = BINARY_AND;
+				expression[i].value = 0xFF;
+				expression[i++].operation = CLOSE_PARENTHESIS;
+				for(unsigned int ii = lowstart+1; ii < i; ii++) {
+					expression[ii].unknown = false;
+					expression[ii].negative = false;
+					expression[ii].complemented = false;
+					expression[ii].not = false;
+					if(ii - lowstart == 1) ii = i - 2;
+				}
+				break;}
+			
+			case DIR_SIZEOF:
+				token = identifyNextToken();
 				switch(token.type) {
-				case LABEL:
-					expression[i].value = labels(token.content).value >> 8 & 0xFF;
-					break;
-				case VARIABLE:
-					expression[i].value = varbls(token.content).value >> 8 & 0xFF;
-					break;
-				case CONSTANT:
-					expression[i].value = varbls(token.content).value >> 8 & 0xFF;
-					break;
-				case ASSUMPTION:
-					if(asmpts(token.content).m) {
-						expression[i].value = asmpts(token.content).valuem;
-						break;
-					}
-				case UNRECORDED_SYMBOL:
+				case STRING:
 					uncalculable = 1;
 					break;
-				case NUMBER:
-					expression[i].value = token.content >> 8 & 0xFF;
+				case REGION_TYPE:
+					expression[i].value = REGION_SIZES[token.content];
 					break;
-				default:
-					errorUnexpectedToken(token);
-					return -1;
 				}
 				break;
 			
-			case DIR_LOW:
+			case DIR_STARTOF:
+				token = identifyNextToken();
 				switch(token.type) {
-				case LABEL:
-					expression[i].value = labels(token.content).value & 0xFF;
-					break;
-				case VARIABLE:
-					expression[i].value = varbls(token.content).value & 0xFF;
-					break;
-				case CONSTANT:
-					expression[i].value = varbls(token.content).value & 0xFF;
-					break;
-				case ASSUMPTION:
-					if(asmpts(token.content).l) {
-						expression[i].value = asmpts(token.content).valuel;
-						break;
-					}
-				case UNRECORDED_SYMBOL:
+				case STRING:
 					uncalculable = 1;
 					break;
-				case NUMBER:
-					expression[i].value = token.content & 0xFF;
+				case REGION_TYPE:
+					expression[i].value = REGION_ADDRESSES[token.content];
 					break;
-				default:
-					errorUnexpectedToken(token);
-					return -1;
 				}
 				break;
 				
 			case DIR_DEF:
 			// determine definition
+				indef = true;
+				token = identifyNextToken();
+				indef = false;
 				switch(token.type) {
+				case NUMBER:
 				case CONSTANT:
+				case CONSTANT_STRING:
 				case VARIABLE:
 				case MACRO:
 				case LABEL:
@@ -1913,16 +2437,78 @@ int processExpression(struct expressionpart** returnexpression, unsigned int num
 				}
 				break;
 			
+			case DIR_STRIN: {
+				token = assertNextTokenType(STRING);
+				char str1[strlen((char*)token.content)+1];
+				strcpy(str1, (char*)token.content);
+				
+				token = assertNextTokenType(COMMA);
+				
+				token = assertNextTokenType(STRING);
+				char str2[strlen((char*)token.content)+1];
+				strcpy(str1, (char*)token.content);
+				
+				unsigned int strinpos = 0;
+				for(unsigned int i = 0; str1[i] != '\0'; i++) {
+					unsigned int ii = 0;
+					while(str2[ii] == str1[i+ii]) ii++;
+					if(str2[ii] == '\0') {
+						strinpos = i;
+						break;
+					}
+				}
+				
+				expression[i].value = strinpos;
+				
+				break;}
+			
+			case DIR_STRFIND: {
+				token = assertNextTokenType(STRING);
+				char str1[strlen((char*)token.content)+1];
+				strcpy(str1, (char*)token.content);
+				
+				token = assertNextTokenType(COMMA);
+				
+				token = assertNextTokenType(STRING);
+				char str2[strlen((char*)token.content)+1];
+				strcpy(str1, (char*)token.content);
+				
+				int strinpos = -1;
+				for(unsigned int i = 0; str1[i] != '\0'; i++) {
+					unsigned int ii = 0;
+					while(str2[ii] == str1[i+ii]) ii++;
+					if(str2[ii] == '\0') {
+						strinpos = i;
+						break;
+					}
+				}
+				
+				expression[i].value = strinpos;
+				
+				break;}
+			
+			case DIR_STRCMP: {
+				token = assertNextTokenType(STRING);
+				char str1[strlen((char*)token.content)+1];
+				strcpy(str1, (char*)token.content);
+				
+				token = assertNextTokenType(COMMA);
+				
+				token = assertNextTokenType(STRING);
+				
+				int value = strcmp(str1, (char*)token.content);
+				if(value > 0) expression[i].value = 1;
+				else if(value < 0) expression[i].value = -1;
+				else expression[i].value = 0;
+				
+				break;}
+			
 			default:
 				errorUnexpectedToken((struct token) { .type = DIRECTIVE, .content = dirtype });
 				return -1;
 			}
 			
-			token = identifyNextToken();
-			if(token.type != OPERATOR || token.content != CLOSE_PARENTHESIS) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextToken(OPERATOR, CLOSE_PARENTHESIS);
 			
 			break;}
 		
@@ -1946,8 +2532,10 @@ int processExpression(struct expressionpart** returnexpression, unsigned int num
 				expression[i].operation = token.content;
 				if(token.content == CLOSE_PARENTHESIS) {
 					if(parenthesisdepth == 0) {
-						errorUnbalancedParentheses();
-						return -1;
+						expression[i].operation = END_OF_EXPRESSION;
+						restoreAsmPos();
+						expressionsize = i + 1;
+						break;
 					}
 					parenthesisdepth--;
 					i++;
@@ -1988,13 +2576,22 @@ int calculateExpression(long* result) {
 		return -1;
 	}
 	
+// if(debug) {
+// 	printf("\n\n");
+// 	unsigned int ii;
+// 	for(ii = 0; expression[ii].operation != END_OF_EXPRESSION; ii++) {
+// 		if(expression[ii].operation == OPEN_PARENTHESIS) printf("%s ", OPERATORS[expression[ii].operation]);
+// 		else if(ii > 0 && expression[ii-1].operation == CLOSE_PARENTHESIS) printf("%s ", OPERATORS[expression[ii].operation]);
+// 		else if(expression[ii].unknown) printf("? %s ", OPERATORS[expression[ii].operation]);
+// 		else printf("%0X %s ", expression[ii].value, OPERATORS[expression[ii].operation]);
+// 	}
+// 	if(!(ii > 0 && expression[ii-1].operation == CLOSE_PARENTHESIS)) printf("%0X", expression[ii].value);
+// 	printf("\n\n");
+// }
 	// calculate
 	unsigned int i = 0;
 	while(true) {
-		if(expression[i].unknown || (expression[i].operation != END_OF_EXPRESSION && expression[i+1].unknown)) {
-			errorUnrecordedSymbol((char*)expression[i].value);
-			return -1;
-		}
+		if(expression[i].unknown || (expression[i].operation != END_OF_EXPRESSION && expression[i+1].unknown)) return 1;
 		
 		
 		if(expression[i].operation == OPEN_PARENTHESIS) {
@@ -2028,14 +2625,16 @@ int calculateExpression(long* result) {
 				*result = expression[i].value;
 				if(expression[0].negative) *result = -(*result);
 				if(expression[0].complemented) *result = ~(*result);
-				if(expression[0].not) *result = result == 0 ? 1 : 0;
+				if(expression[0].not) {
+					*result = (*result) == 0 ? 1 : 0;
+				}
 				free(expression);
 				return 0;
 			}
 			i = 0;
 			continue;
 		}
-			
+		
 		
 		else if(OPERATOR_PRIORITY[expression[i].operation] >= OPERATOR_PRIORITY[expression[i+1].operation]) {
 			long operand1 = expression[i].value;
@@ -2110,7 +2709,7 @@ int calculateExpression(long* result) {
 				expression[i].value = operand1 || operand2 ? 1 : 0;
 				break;
 			default:
-				printf("unexpected operator %s", OPERATOR_STRINGS[expression[i].operation]);
+				printf("unexpected operator %s", OPERATORS[expression[i].operation]);
 				free(expression);
 				return -1;
 			}
@@ -2146,6 +2745,17 @@ int calculateExpressionWithAssumption(unsigned long romdata, unsigned int numbit
 		return -1;
 	}
 	
+// if(debug) {
+// 	printf("\n\n");
+// 	unsigned int ii;
+// 	for(ii = 0; expression[ii].operation != END_OF_EXPRESSION; ii++) {
+// 		if(expression[ii].operation == OPEN_PARENTHESIS) printf("%s ", OPERATORS[expression[ii].operation]);
+// 		else if(ii > 0 && expression[ii-1].operation == CLOSE_PARENTHESIS) printf("%s ", OPERATORS[expression[ii].operation]);
+// 		else printf("%0X %s ", expression[ii].value, OPERATORS[expression[ii].operation]);
+// 	}
+// 	if(!(ii > 0 && expression[ii-1].operation == CLOSE_PARENTHESIS)) printf("%0X", expression[ii].value);
+// 	printf("\n\n");
+// }
 	// resolve all calculable parts
 	unsigned int i = 0;
 	unsigned int expressionend = 1024;
@@ -2271,7 +2881,7 @@ int calculateExpressionWithAssumption(unsigned long romdata, unsigned int numbit
 				expression[i].value = operand1 || operand2 ? 1 : 0;
 				break;
 			default:
-				printf("unexpected operator %s", OPERATOR_STRINGS[expression[i].operation]);
+				printf("unexpected operator %s", OPERATORS[expression[i].operation]);
 				free(expression);
 				return -1;
 			}
@@ -2385,7 +2995,7 @@ int calculateExpressionWithAssumption(unsigned long romdata, unsigned int numbit
 			break;
 		default:
 			free(expression);
-			printf("unexpected operator %s", OPERATOR_STRINGS[expression[operationpos].operation]);
+			printf("unexpected operator %s", OPERATORS[expression[operationpos].operation]);
 			return -1;
 		}
 		
@@ -2407,40 +3017,54 @@ int calculateExpressionWithAssumption(unsigned long romdata, unsigned int numbit
 		if(numbits >= 8) {
 			asmpts(assumptioncount).valuel = assumption & 0xFF;
 			asmpts(assumptioncount).l = true;
-			if(numbits >= 16) {
-				asmpts(assumptioncount).valuem = (assumption >> 8) & 0xFF;
-				asmpts(assumptioncount).m = true;
-				if(numbits >= 24) {
-				asmpts(assumptioncount).valueh = (assumption >> 16) & 0xFF;
-				asmpts(assumptioncount).h = true;
-				} else asmpts(assumptioncount).h = false;
-			} else asmpts(assumptioncount).m = false;
 		} else asmpts(assumptioncount).l = false;
+		if(numbits >= 16) {
+			asmpts(assumptioncount).valuem = (assumption >> 8) & 0xFF;
+			asmpts(assumptioncount).m = true;
+		} else asmpts(assumptioncount).m = false;
+		if(numbits >= 24) {
+		asmpts(assumptioncount).valueh = (assumption >> 16) & 0xFF;
+		asmpts(assumptioncount).h = true;
+		} else asmpts(assumptioncount).h = false;
+if(strcmp(asmpts(assumptioncount).name, "SFX_Caught_Mon") == 0) {
+	printLocation();
+	printf("\n%s is assumed as %0X\n", asmpts(assumptioncount).name, asmpts(assumptioncount).valuel | (asmpts(assumptioncount).valuem << 8) | (asmpts(assumptioncount).valueh << 16));
+	return -1;
+}
 		incrementAssumptionlist;
 	} else {
 		if(numbits >= 8) {
 			if(asmpts(expression[0].value).l) {
-				if(assumption & 0xFF != asmpts(expression[0].value).valuel) {
-					errorInconsistentAssumption((char*)expression[0].value, assumption, 0 | (asmpts(expression[0].value).l ? asmpts(expression[0].value).valuel : 0)
-						| (asmpts(expression[0].value).m ? asmpts(expression[0].value).valuem << 8 : 0) | (asmpts(expression[0].value).h ? asmpts(expression[0].value).valueh << 16 : 0));
+				if((assumption & 0xFF) != asmpts(expression[0].value).valuel) {
+					errorInconsistentAssumption(asmpts(expression[0].value).name, assumption, 0
+						| (asmpts(expression[0].value).l ? asmpts(expression[0].value).valuel : 0)
+						| (asmpts(expression[0].value).m ? asmpts(expression[0].value).valuem << 8 : 0)
+						| (asmpts(expression[0].value).h ? asmpts(expression[0].value).valueh << 16 : 0));
+					return -1;
 				}
 			} else asmpts(expression[0].value).valuel = assumption & 0xFF;
-			if(numbits >= 16) {
-				if(asmpts(expression[0].value).m) {
-					if((assumption >> 8) & 0xFF != asmpts(expression[0].value).valuem) {
-						errorInconsistentAssumption((char*)expression[0].value, assumption, (0 | asmpts(expression[0].value).l ? asmpts(expression[0].value).valuel : 0)
-							| (asmpts(expression[0].value).m ? asmpts(expression[0].value).valuem << 8 : 0) | (asmpts(expression[0].value).h ? asmpts(expression[0].value).valueh << 16 : 0));
-					}
-				} else asmpts(expression[0].value).valuem = (assumption >> 8) & 0xFF;
-				if(numbits >= 24) {
-					if(asmpts(expression[0].value).h) {
-						if((assumption >> 16) & 0xFF != asmpts(expression[0].value).valueh) {
-							errorInconsistentAssumption((char*)expression[0].value, assumption, 0 | (asmpts(expression[0].value).l ? asmpts(expression[0].value).valuel : 0)
-								| (asmpts(expression[0].value).m ? asmpts(expression[0].value).valuem << 8 : 0) | (asmpts(expression[0].value).h ? asmpts(expression[0].value).valueh << 16 : 0));
-						}
-					} else asmpts(expression[0].value).valueh = (assumption >> 16) & 0xFF;
+		}
+		if(numbits >= 16) {
+			if(asmpts(expression[0].value).m) {
+				if(((assumption >> 8) & 0xFF) != asmpts(expression[0].value).valuem) {
+					errorInconsistentAssumption(asmpts(expression[0].value).name, assumption, 0
+						| (asmpts(expression[0].value).l ? asmpts(expression[0].value).valuel : 0)
+						| (asmpts(expression[0].value).m ? asmpts(expression[0].value).valuem << 8 : 0)
+						| (asmpts(expression[0].value).h ? asmpts(expression[0].value).valueh << 16 : 0));
+					return -1;
 				}
-			}
+			} else asmpts(expression[0].value).valuem = (assumption >> 8) & 0xFF;
+		}
+		if(numbits >= 24) {
+			if(asmpts(expression[0].value).h) {
+				if(((assumption >> 16) & 0xFF) != asmpts(expression[0].value).valueh) {
+					errorInconsistentAssumption(asmpts(expression[0].value).name, assumption, 0
+						| (asmpts(expression[0].value).l ? asmpts(expression[0].value).valuel : 0)
+						| (asmpts(expression[0].value).m ? asmpts(expression[0].value).valuem << 8 : 0)
+						| (asmpts(expression[0].value).h ? asmpts(expression[0].value).valueh << 16 : 0));
+					return -1;
+				}
+			} else asmpts(expression[0].value).valueh = (assumption >> 16) & 0xFF;
 		}
 	}
 	
@@ -2451,59 +3075,38 @@ int calculateExpressionWithAssumption(unsigned long romdata, unsigned int numbit
 
 
 
-unsigned char* mapstring(char* string) {
-	unsigned char data[1024];
-	unsigned int datalength = 0;
-	for(unsigned int i = 0; string[i] != '\0'; i++) {
-		unsigned int longestmatch = 1024;
-		unsigned int longestmatchlength = 0;
-		for(unsigned int ii = 0; ii < charmapcount; ii++) {
-			for(unsigned int iii = 0; string[i+iii] == charms(ii).chars[iii]; iii++) {
-				if(charms(ii).chars[iii+1] == '\0' && iii+1 > longestmatchlength) {
-					longestmatch = ii;
-					longestmatchlength = iii+1;
-					break;
-				}
-			}
-		}
-		if(longestmatchlength == 0) {
-			data[datalength++] = string[i++];
-		} else {
-			data[datalength++] = charms(longestmatch).value;
-			i += longestmatchlength;
-		}
-	}
-	unsigned char* returndata = malloc(datalength+1);
-	for(unsigned int i; i < datalength; i++) returndata[i] = data[i];
-	returndata[datalength] = '\0';
-	return returndata;
-}
-
-
 
 
 int processNextStatement() {
+// if(strcmp(asmpath, "data/maps/objects/SeafoamIslands1F.asm") == 0) {
+// 	debug = true;
+// 	printf("!");
+// }
+if(debug && currentmacro == 0) printf("%0X ", mempos);
+if(debug && mempos > 0x0149D0 + 6) return -1;
+	firsttoken = true;
 	struct token token = identifyNextToken();
+	firsttoken = false;
 	
   if(debug) {
 	switch(token.type) {
 	case OPCODE:
-		printf("%s ", OPCODE_STRINGS[token.content]);
+		printf("%s ", OPCODES[token.content]);
 		break;
 	case DIRECTIVE:
-		printf("%s ", DIRECTIVE_STRINGS[token.content]);
+		printf("%s ", DIRECTIVES[token.content]);
 		break;
 	case PREDECLARED_SYMBOL:
-		printf("%s ", PREDEF_STRINGS[token.content]);
+		printf("%s ", PREDEFS[token.content]);
 		break;
 	case REGISTER:
-		printf("%s ", REGISTER_STRINGS[token.content]);
+		printf("%s ", REGISTERS[token.content]);
 		break;
 	case CONDITION:
-		printf("%s ", CC_STRINGS[token.content]);
+		printf("%s ", CCS[token.content]);
 		break;
 	case OPERATOR:
-		printf("%s ", OPERATOR_STRINGS[token.content]);
+		printf("%s ", OPERATORS[token.content]);
 		break;
 	case MACRO:
 		printf("%s ", macros(token.content).name);
@@ -2531,47 +3134,58 @@ int processNextStatement() {
 	case NEWLINE:
 		break;
 	default:
-		printf("%s ", TOKEN_STRINGS[token.type]);
+		printf("%s ", TOKENS[token.type]);
 		break;
 	}
   }
 	
 	
 	
-	if(token.type == LABEL && labels(token.content).value != mempos) {
-		errorLabelAlreadyDefined((char*)token.content);
-		return -1;
-	}
-		
-	if(token.type == ASSUMPTION) {
-		if((asmpts(token.content).l && (mempos & 0xFF) != asmpts(token.content).valuel) ||
-			(asmpts(token.content).m && ((mempos >> 8) & 0xFF) != asmpts(token.content).valuem) ||
-			(asmpts(token.content).h && ((mempos >> 16) & 0xFF) != asmpts(token.content).valueh)) {
-			errorIncorrectAssumption((char*)asmpts(token.content).name, mempos, 0 | (asmpts(token.content).l ? asmpts(token.content).valuel : 0)
-				| (asmpts(token.content).m ? (asmpts(token.content).valuem << 8) : 0) | (asmpts(token.content).h ? (asmpts(token.content).valueh << 16) : 0));
-			return -1;
-		}
-		labels(labelcount) = (struct label) { .name = asmpts(token.content).name, .value = mempos};
-		assumptioncount--;
-		for(unsigned int i = token.content; i < assumptioncount; i++) {
-			asmpts(i) = asmpts(i+1);
-		}
-	}
-	
-	else if(token.type == UNRECORDED_SYMBOL) {
-		labels(labelcount) = (struct label) { .name = strcpy(malloc(strlen((char*)token.content)+1), (char*)token.content), .value = mempos };
-	}
-	
 	if(token.type == ASSUMPTION || token.type == UNRECORDED_SYMBOL || token.type == LABEL) {
-		if(currentsection[0] == '\0') {
-			errorLabelCannotExistOutsideOfSection();
-			return -1;
+		if(!loaddata) {
+			if(currentsection[0] == '\0') {
+				errorLabelCannotExistOutsideOfSection();
+				return -1;
+			}
+			
+			unsigned int labelindex;
+			
+			if(token.type == LABEL) {
+				if(labels(token.content).value != mempos) {
+					errorLabelAlreadyDefined(labels(token.content).name);
+					return -1;
+				}
+				labelindex = token.content;
+			}
+			
+			else if(token.type == ASSUMPTION) {
+				if((asmpts(token.content).l && (mempos & 0xFF) != asmpts(token.content).valuel) ||
+					(asmpts(token.content).m && ((mempos >> 8) & 0xFF) != asmpts(token.content).valuem)) {
+					errorIncorrectAssumption((char*)asmpts(token.content).name, mempos&0xFFFF, 0 | (asmpts(token.content).l ? asmpts(token.content).valuel : 0)
+						| (asmpts(token.content).m ? (asmpts(token.content).valuem << 8) : 0));
+					return -1;
+				}
+				
+				labelindex = labelcount;
+				recordLabel(asmpts(token.content).name);
+				if(assumptioncount % 1024 == 0) free(assumptionlist[assumptioncount/1024]);
+				assumptioncount--;
+				for(unsigned int i = token.content; i < assumptioncount; i++) asmpts(i) = asmpts(i+1);
+			}
+			
+			else if(token.type == UNRECORDED_SYMBOL) {
+				
+				labelindex = labelcount;
+				recordLabel(strcpy(malloc(strlen((char*)token.content)+1), (char*)token.content));
+			}
+			
+			char newlabelscope[1024];
+			unsigned int i;
+			for(i = 0; labels(labelindex).name[i] != '.' && i < strlen(labels(labelindex).name); i++) newlabelscope[i] = labels(labelindex).name[i];
+			newlabelscope[i] = '\0';
+			if(strcmp(labelscope, newlabelscope) != 0) strcpy(labelscope, newlabelscope);
+			locallabelscope = labels(labelindex).name;
 		}
-		
-		if(token.type != LABEL) {
-			if(!lastsymbolislocal) labelscope = labels(labelcount).name;
-			incrementLabellist;
-		} else if(!lastsymbolislocal) labelscope = labels(token.content).name;
 		
 		char colon = getNextChar();
 		if(colon == ':') {
@@ -2587,7 +3201,7 @@ int processNextStatement() {
 	switch(token.type) {
 		
 	case OPCODE: {
-		if(mempos >= 0x8000) {
+		if((mempos & 0xFFFF) >= 0x8000 && !loadlabels) {
 			errorSectionCannotContainData();
 			return -1;
 		}
@@ -2597,21 +3211,21 @@ int processNextStatement() {
 		}
 		
 		enum asmopcode opcode;
-		enum opcodearg arg1 = NO;
-		enum opcodearg arg2 = NO;
-		int arg1content;
-		int arg2content;
+		enum asmarg arg1 = NO;
+		enum asmarg arg2 = NO;
+		unsigned int argcontent = -1;
 		
 		// identify opcode
 		opcode = token.content;
 		
-		// identify first argument
 		saveAsmPos();
 		token = identifyNextToken();
+		
+		// identify first argument
 		switch(token.type) {
 		case REGISTER:
 			if(token.content == REG_C && (opcode == JP || opcode == JR || opcode == CALL || opcode == RET)) {
-				// c can never be identified as a condition, so a catch is here
+				// identifyNextToken will always identify c as a register before a condition, so it is caught here
 				arg1 = ccC;
 				break;
 			}
@@ -2622,6 +3236,7 @@ int processNextStatement() {
 			arg1 = token.content - REG_A + A;
 			break;
 		
+		case STRING:
 		case DIRECTIVE:
 		case OPERATOR:
 		case LABEL:
@@ -2630,46 +3245,66 @@ int processNextStatement() {
 		case ASSUMPTION:
 		case UNRECORDED_SYMBOL:
 		case NUMBER:
+			restoreAsmPos();
 			switch(opcode) {
 				long romfilepos;
 				unsigned long romdata;
 				long result;
 			case CALL:
 			case JP:
-				romfilepos = ftell(romfile);
-				fgetc(romfile);
-				romdata = fgetc(romfile) | (fgetc(romfile) << 8);
-				fseek(romfile, romfilepos, SEEK_SET);
-				restoreAsmPos();
-				if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
-				if(result > 0xFFFF) {
-					errorMustBe16Bit(token);
-					return -1;
-				}
-				if(result < 0) {
-					result *= -1;
+				if(!loadlabels) {
+					romfilepos = ftell(romfile);
+					fgetc(romfile);
+					romdata = fgetc(romfile) | (fgetc(romfile) << 8);
+					fseek(romfile, romfilepos, SEEK_SET);
+					if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
 					if(result > 0xFFFF) {
-						errorMustBe16Bit(token);
+						errorValueTooLarge(16);
 						return -1;
 					}
-					result = 0x10000 - result;
+					if(result < 0) {
+						result *= -1;
+						if(result > 0xFFFF) {
+							errorValueTooLarge(16);
+							return -1;
+						}
+						result = 0x10000 - result;
+					}
+					argcontent = result;
+				} else {
+					struct expressionpart* expression = 0;
+					int procresult = processExpression(&expression, 16);
+					if(procresult != 0 && procresult != 1) return -1;
 				}
 				arg1 = n16;
-				arg1content = result;
 				break;
 			case JR:
-				romfilepos = ftell(romfile);
-				fgetc(romfile);
-				romdata = fgetc(romfile) + (mempos+2);
-				fseek(romfile, romfilepos, SEEK_SET);
-				restoreAsmPos();
-				if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
-				result -= (mempos+2);
-				if(result > 128 || result < -129) {
-					errorTargetOutOfReach(token);
-					return -1;
+				if(!loadlabels) {
+					romfilepos = ftell(romfile);
+					fgetc(romfile);
+					romdata = fgetc(romfile);
+					fseek(romfile, romfilepos, SEEK_SET);
+					if(!loaddata) {
+						romdata += ((mempos&0xFFFF)+2);
+						fseek(romfile, romfilepos, SEEK_SET);
+						if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
+						result -= ((mempos&0xFFFF)+2);
+					} else {
+						struct expressionpart* expression = 0;
+						int procresult = processExpression(&expression, 16);
+						if(procresult != 0 && procresult != 1) return -1;
+						result = romdata;
+					}
+					if((signed char)result > 128 || (signed char)result < -129) {
+						errorTargetOutOfReach(result);
+						return -1;
+					}
+					argcontent = (unsigned char) result;
+				} else {
+					struct expressionpart* expression = 0;
+					int procresult = processExpression(&expression, 16);
+					if(procresult != 0 && procresult != 1) return -1;
 				}
-				arg1content = result;
 				arg1 = e8;
 				break;
 			case ADD:
@@ -2680,47 +3315,70 @@ int processNextStatement() {
 			case XOR:
 			case OR:
 			case CP:
-				romfilepos = ftell(romfile);
-				fgetc(romfile);
-				romdata = fgetc(romfile);
-				fseek(romfile, romfilepos, SEEK_SET);
-				restoreAsmPos();
-				if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
-				if(result > 0xFF) {
-					errorMustBe8Bit(token);
-					return -1;
-				}
-				if(result < 0) {
-					result *= -1;
+				if(!loadlabels) {
+					romfilepos = ftell(romfile);
+					fgetc(romfile);
+					romdata = fgetc(romfile);
+					fseek(romfile, romfilepos, SEEK_SET);
+					if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
 					if(result > 0xFF) {
-						errorMustBe8Bit(token);
+						errorValueTooLarge(8);
 						return -1;
 					}
-					result = 0x100 - result;
+					if(result < 0) {
+						result *= -1;
+						if(result > 0xFF) {
+							errorValueTooLarge(8);
+							return -1;
+						}
+						result = 0x100 - result;
+					}
+					argcontent = result;
+				} else {
+					struct expressionpart* expression = 0;
+					int procresult = processExpression(&expression, 8);
+					if(procresult != 0 && procresult != 1) return -1;
 				}
 				arg1 = A;
 				arg2 = n8;
-				arg2content = result;
 				break;
 			case RST:
-				romfilepos = ftell(romfile);
-				romdata = fgetc(romfile) & 0x38;
-				fseek(romfile, romfilepos, SEEK_SET);
-				restoreAsmPos();
-				if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
-				if(result & 0x7 != 0 || result > 0x38) errorUnexpectedToken(token); return -1;
+				if(!loadlabels) {
+					romfilepos = ftell(romfile);
+					romdata = fgetc(romfile) & 0x38;
+					fseek(romfile, romfilepos, SEEK_SET);
+					if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
+					if((result & 0x7) != 0 || result > 0x38) {
+						errorUnexpectedToken(token);
+						return -1;
+					}
+				} else {
+					struct expressionpart* expression = 0;
+					int procresult = processExpression(&expression, 8);
+					if(procresult != 0 && procresult != 1) return -1;
+					result = 0;
+				}
 				arg1 = v00 + (result >> 3);
 				break;
 			case BIT:
 			case RES:
 			case SET:
-				romfilepos = ftell(romfile);
-				fgetc(romfile);
-				romdata = (fgetc(romfile) >> 3) & 0x7;
-				fseek(romfile, romfilepos, SEEK_SET);
-				restoreAsmPos();
-				if(calculateExpressionWithAssumption(romdata, 3, &result) != 0) return -1;
-				if(result < 0 || result > 7) { errorMustBe3Bit(token); return -1; }
+				if(!loadlabels) {
+					romfilepos = ftell(romfile);
+					fgetc(romfile);
+					romdata = (fgetc(romfile) >> 3) & 0x7;
+					fseek(romfile, romfilepos, SEEK_SET);
+					if(calculateExpressionWithAssumption(romdata, 3, &result) != 0) return -1;
+					if(result < 0 || result > 7) {
+						errorValueTooLarge(3);
+						return -1;
+					}
+				} else {
+					struct expressionpart* expression = 0;
+					int procresult = processExpression(&expression, 3);
+					if(procresult != 0 && procresult != 1) return -1;
+					result = 0;
+				}
 				arg1 = u0 + result;
 				break;
 			}
@@ -2746,7 +3404,15 @@ int processNextStatement() {
 					arg1 = m_DE;
 					break;
 				case REG_HL:
-					arg1 = m_HL;
+					if(opcode == LDI) {
+						opcode = LD;
+						arg1 = m_HLI;
+					} else if(opcode == LDD) {
+						opcode = LD;
+						arg1 = m_HLD;
+					} else {
+						arg1 = m_HL;
+					}
 					break;
 				case REG_HLI:
 					arg1 = m_HLI;
@@ -2759,6 +3425,8 @@ int processNextStatement() {
 					return -1;
 				}
 				break;
+			
+			case STRING:
 			case DIRECTIVE:
 			case OPERATOR:
 			case LABEL:
@@ -2767,43 +3435,51 @@ int processNextStatement() {
 			case ASSUMPTION:
 			case UNRECORDED_SYMBOL:
 			case NUMBER:
+				restoreAsmPos();
 				if(opcode == LD) {
-					romfilepos = ftell(romfile);
-					fgetc(romfile);
-					romdata = fgetc(romfile) | (fgetc(romfile) << 8);
-					fseek(romfile, romfilepos, SEEK_SET);
-					restoreAsmPos();
-					if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
-					if(result > 0xFFFF) {
-						errorMustBe16Bit(token);
-						return -1;
+					if(!loadlabels) {
+						romfilepos = ftell(romfile);
+						fgetc(romfile);
+						romdata = fgetc(romfile) | (fgetc(romfile) << 8);
+						fseek(romfile, romfilepos, SEEK_SET);
+						if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
+						if(result > 0xFFFF) {
+							errorValueTooLarge(16);
+							return -1;
+						}
+						argcontent = result;
+					} else {
+						struct expressionpart* expression = 0;
+						int procresult = processExpression(&expression, 16);
+						if(procresult != 0 && procresult != 1) return -1;
 					}
 					arg1 = m_a16;
-					arg1content = result;
 				} else if(opcode == LDH) {
-					romfilepos = ftell(romfile);
-					fgetc(romfile);
-					romdata = fgetc(romfile) + 0xFF00;
-					fseek(romfile, romfilepos, SEEK_SET);
-					restoreAsmPos();
-					if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
-					if(result < 0xFF00 || result > 0xFFFF) {
-						errorTargetOutOfReach(token);
-						return -1;
+					if(!loadlabels) {
+						romfilepos = ftell(romfile);
+						fgetc(romfile);
+						romdata = fgetc(romfile) + 0xFF00;
+						fseek(romfile, romfilepos, SEEK_SET);
+						if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
+						if(result < 0xFF00 || result > 0xFFFF) {
+							errorTargetOutOfReach(result);
+							return -1;
+						}
+						argcontent = result - 0xFF00;
+					} else {
+						struct expressionpart* expression = 0;
+						int procresult = processExpression(&expression, 16);
+						if(procresult != 0 && procresult != 1) return -1;
 					}
 					arg1 = m_a8;
-					arg1content = result - 0xFF00;
 				} else {
 					errorUnexpectedToken(token);
 					return -1;
 				}
 				break;
 			}
-			token = identifyNextToken();
-			if(token.type != MEMORY_CLOSE) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			
+			token = assertNextTokenType(MEMORY_CLOSE);
 			break;
 		
 		
@@ -2814,6 +3490,7 @@ int processNextStatement() {
 		
 		case NEWLINE:
 		case END_OF_FILE:
+			restoreAsmPos();
 			arg1 = NO;
 			break;
 		
@@ -2826,6 +3503,7 @@ int processNextStatement() {
 		
 		// identify second argument
 		if(arg1 != NO && arg2 == NO) {
+			saveAsmPos();
 			token = identifyNextToken();
 			if(token.type == COMMA) {
 				saveAsmPos();
@@ -2835,14 +3513,29 @@ int processNextStatement() {
 					unsigned long romdata;
 					long result;
 				case REGISTER:
-					if(token.content == REG_HLI || token.content == REG_HLD || token.content == INVALID_REGISTER) {
+					if(token.content == REG_HLI || token.content == REG_HLD) {
 						errorUnexpectedToken(token);
 						return -1;
 					}
 					arg2 = token.content - REG_A + A;
+					if(token.content == REG_SP) {
+						saveAsmPos();
+						token = identifyNextToken();
+						if(token.type == OPERATOR && token.content == OPERATION_ADD) {
+							romfilepos = ftell(romfile);
+							fgetc(romfile);
+							romdata = fgetc(romfile);
+							fseek(romfile, romfilepos, SEEK_SET);
+							if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
+							arg2 = SPe8;
+							argcontent = result;
+							break;
+						} else restoreAsmPos();
+					}
 					break;
 					
 					
+				case STRING:
 				case DIRECTIVE:
 				case OPERATOR:
 				case LABEL:
@@ -2851,6 +3544,7 @@ int processNextStatement() {
 				case ASSUMPTION:
 				case UNRECORDED_SYMBOL:
 				case NUMBER:
+					restoreAsmPos();
 					switch(opcode) {
 					case LD:
 						if((arg1 >= A && arg1 < A+7) || arg1 == m_HL) goto opcodearg2n8;
@@ -2860,26 +3554,31 @@ int processNextStatement() {
 						}
 					case JP:
 					case CALL:
-						romfilepos = ftell(romfile);
-						fgetc(romfile);
-						romdata = fgetc(romfile) | (fgetc(romfile) << 8);
-						fseek(romfile, romfilepos, SEEK_SET);
-						restoreAsmPos();
-						if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
-						if(result > 0xFFFF) {
-							errorMustBe16Bit(token);
-							return -1;
-						}
-						if(result < 0) {
-							result *= -1;
+						if(!loadlabels) {
+							romfilepos = ftell(romfile);
+							fgetc(romfile);
+							romdata = fgetc(romfile) | (fgetc(romfile) << 8);
+							fseek(romfile, romfilepos, SEEK_SET);
+							if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
 							if(result > 0xFFFF) {
-								errorMustBe16Bit(token);
+								errorValueTooLarge(16);
 								return -1;
 							}
-							result = 0x10000 - result;
+							if(result < 0) {
+								result *= -1;
+								if(result > 0xFFFF) {
+									errorValueTooLarge(16);
+									return -1;
+								}
+								result = 0x10000 - result;
+							}
+							argcontent = result;
+						} else {
+							struct expressionpart* expression = 0;
+							int procresult = processExpression(&expression, 16);
+							if(procresult != 0 && procresult != 1) return -1;
 						}
 						arg2 = n16;
-						arg2content = result;
 						break;
 					case ADD:
 						if (arg1 == SP) goto opcdoearg2e8;
@@ -2895,44 +3594,61 @@ int processNextStatement() {
 					case OR:
 					case CP:
 					opcodearg2n8: // case LD:
-						romfilepos = ftell(romfile);
-						fgetc(romfile);
-						romdata = fgetc(romfile);
-						fseek(romfile, romfilepos, SEEK_SET);
-						restoreAsmPos();
-						if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
-						if(result > 0xFF) {
-							errorMustBe8Bit(token);
-							return -1;
-						}
-						if(result < 0) {
-							result *= -1;
+						if(!loadlabels) {
+							romfilepos = ftell(romfile);
+							fgetc(romfile);
+							romdata = fgetc(romfile);
+							fseek(romfile, romfilepos, SEEK_SET);
+							if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
 							if(result > 0xFF) {
-								errorMustBe8Bit(token);
+								errorValueTooLarge(8);
 								return -1;
 							}
-							result = 0x100 - result;
+							if(result < 0) {
+								result *= -1;
+								if(result > 0xFF) {
+									errorValueTooLarge(8);
+									return -1;
+								}
+								result = 0x100 - result;
+							}
+							argcontent = result;
+						} else {
+							struct expressionpart* expression = 0;
+							int procresult = processExpression(&expression, 8);
+							if(procresult != 0 && procresult != 1) return -1;
 						}
 						arg2 = n8;
-						arg2content = result;
 						break;
 					case JR:
 					opcdoearg2e8: // ADD:
-						romfilepos = ftell(romfile);
-						fgetc(romfile);
-						romdata = fgetc(romfile);
-						if(romdata >= 128) romdata = -((~romdata & 0xFF) + 1);
-						romdata += (mempos+2);
-						fseek(romfile, romfilepos, SEEK_SET);
-						restoreAsmPos();
-						if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
-						result -= (mempos+2);
-						if(result > 128 && result < -129) {
-							errorTargetOutOfReach(token);
-							return -1;
+						if(!loadlabels) {
+							romfilepos = ftell(romfile);
+							fgetc(romfile);
+							romdata = fgetc(romfile);
+							fseek(romfile, romfilepos, SEEK_SET);
+							if(!loaddata) {
+								if(romdata >= 128) romdata = -((~romdata & 0xFF) + 1);
+								romdata += ((mempos&0xFFFF)+2);
+								if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
+								result -= ((mempos&0xFFFF)+2);
+							} else {
+								struct expressionpart* expression = 0;
+								int procresult = processExpression(&expression, 16);
+								if(procresult != 0 && procresult != 1) return -1;
+								result = romdata;
+							}
+							if((signed char)result > 128 && (signed char)result < -129) {
+								errorTargetOutOfReach(result);
+								return -1;
+							}
+							argcontent = (unsigned char) result;
+						} else {
+							struct expressionpart* expression = 0;
+							int procresult = processExpression(&expression, 16);
+							if(procresult != 0 && procresult != 1) return -1;
 						}
 						arg2 = e8;
-						arg2content = result;
 						break;
 					}
 					break;
@@ -2957,7 +3673,15 @@ int processNextStatement() {
 							arg2 = m_DE;
 							break;
 						case REG_HL:
-							arg2 = m_HL;
+							if(opcode == LDI) {
+								opcode = LD;
+								arg2 = m_HLI;
+							} else if(opcode == LDD) {
+								opcode = LD;
+								arg2 = m_HLD;
+							} else {
+								arg2 = m_HL;
+							}
 							break;
 						case REG_HLI:
 							arg2 = m_HLI;
@@ -2970,6 +3694,8 @@ int processNextStatement() {
 							return -1;
 						}
 						break;
+					
+					case STRING:
 					case DIRECTIVE:
 					case OPERATOR:
 					case LABEL:
@@ -2978,155 +3704,123 @@ int processNextStatement() {
 					case ASSUMPTION:
 					case UNRECORDED_SYMBOL:
 					case NUMBER:
+						restoreAsmPos();
 						if(opcode == LD) {
-							romfilepos = ftell(romfile);
-							fgetc(romfile);
-							romdata = fgetc(romfile) | (fgetc(romfile) << 8);
-							fseek(romfile, romfilepos, SEEK_SET);
-							restoreAsmPos();
-							if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
-							if(result > 0xFFFF) {
-								errorMustBe16Bit(token);
-								return -1;
+							if(!loadlabels) {
+								romfilepos = ftell(romfile);
+								fgetc(romfile);
+								romdata = fgetc(romfile) | (fgetc(romfile) << 8);
+								fseek(romfile, romfilepos, SEEK_SET);
+								if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
+								if(result > 0xFFFF) {
+									errorValueTooLarge(16);
+									return -1;
+								}
+								argcontent = result;
+							} else {
+								struct expressionpart* expression = 0;
+								int procresult = processExpression(&expression, 16);
+								if(procresult != 0 && procresult != 1) return -1;
 							}
 							arg2 = m_a16;
-							arg2content = result;
 						} else if(opcode == LDH) {
-							romfilepos = ftell(romfile);
-							fgetc(romfile);
-							romdata = fgetc(romfile) + 0xFF00;
-							fseek(romfile, romfilepos, SEEK_SET);
-							restoreAsmPos();
-							if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
-							if(result < 0xFF00 || result > 0xFFFF) {
-								errorTargetOutOfReach(token);
-								return -1;
+							if(!loadlabels) {
+								romfilepos = ftell(romfile);
+								fgetc(romfile);
+								romdata = fgetc(romfile) + 0xFF00;
+								fseek(romfile, romfilepos, SEEK_SET);
+								if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
+								if(result < 0xFF00 || result > 0xFFFF) {
+									errorTargetOutOfReach(result);
+									return -1;
+								}
+								argcontent = result - 0xFF00;
+							} else {
+								struct expressionpart* expression = 0;
+								int procresult = processExpression(&expression, 16);
+								if(procresult != 0 && procresult != 1) return -1;
 							}
 							arg2 = m_a8;
-							arg2content = result - 0xFF00;
 						} else {
 							errorUnexpectedToken(token);
 							return -1;
 						}
 						break;
 					}
-					token = identifyNextToken();
-					if(token.type != MEMORY_CLOSE) {
-						errorUnexpectedToken(token);
-						return -1;
-					}
+					
+					token = assertNextTokenType(MEMORY_CLOSE);
 					break;
+				
 				default:
 					errorUnexpectedToken(token);
 					return -1;
 				}
-				token = identifyNextToken();
-				if(token.type != NEWLINE && token.type != END_OF_FILE) {
-					errorUnexpectedToken(token);
-					return -1;
-				}
-			} else if(token.type == NEWLINE || token.type == END_OF_FILE) {
+			} else {
+				restoreAsmPos();
 				if(opcode == ADD || opcode == ADC || opcode == SUB || opcode == SBC || opcode == AND || opcode == XOR || opcode == OR || opcode == CP) {
 					arg2 = arg1;
 					arg1 = A;
 				} else arg2 = NO;
-			} else {
-				errorUnexpectedToken(token);
-				return -1;
-			}
-		} else if(arg1 != NO) {
-			token = identifyNextToken();
-			if(token.type != NEWLINE && token.type != END_OF_FILE) {
-				errorUnexpectedToken(token);
-				return -1;
 			}
 		}
 		
 		// identify instruction
-		{ unsigned int i;
-		for(i = 0; i < sizeof(INSTRUCTIONS)/sizeof(struct instruction); i++) {
-			if(opcode == INSTRUCTIONS[i].opcode && arg1 == INSTRUCTIONS[i].arg1 && arg2 == INSTRUCTIONS[i].arg2) {
-				unsigned char rombyte;
-				
-				rombyte = (unsigned char) fgetc(romfile);
-				if(rombyte != INSTRUCTIONS[i].byte) {
-					errorInconsistentDataOpcode(rombyte, INSTRUCTIONS[i].byte);
-					return -1;
+		if(!loadlabels) {
+			unsigned char romdata = fgetc(romfile);
+			if(romdata != 0xCB) {
+				for(unsigned int i = 0; i < sizeof(INSTRUCTIONS)/sizeof(struct instruction); i++) if(INSTRUCTIONS[i].byte == romdata) {
+					enum asmopcode romopcode = INSTRUCTIONS[i].opcode;
+					enum asmarg romarg1 = INSTRUCTIONS[i].arg1;
+					enum asmarg romarg2 = INSTRUCTIONS[i].arg2;
+					int romargcontent = -1;
+					
+					if(romarg1 == n8 || romarg1 == e8 || romarg1 == m_a8 || romarg2 == n8 || romarg2 == e8 || romarg2 == m_a8 || arg2 == SPe8) {
+						romargcontent = fgetc(romfile);
+					} else if(romarg1 == n16 || romarg1 == m_a16 || romarg2 == n16 || romarg2 == m_a16) {
+						romargcontent = fgetc(romfile) | (fgetc(romfile) << 8);
+					}
+					
+					if(opcode != romopcode || arg1 != romarg1 || arg2 != romarg2) {
+						errorInconsistentDataInstruction(opcode, arg1, arg2, argcontent, romopcode, romarg1, romarg2, romargcontent);
+						return -1;
+					}
+					
+					if(arg1 == n8 || arg1 == e8 || arg1 == m_a8 || arg2 == n8 || arg2 == e8 || arg2 == m_a8 || arg2 == SPe8) {
+						if(argcontent != romargcontent) {
+							errorInconsistentDataInstruction(opcode, arg1, arg2, argcontent, romopcode, romarg1, romarg2, romargcontent);
+							return -1;
+						}
+					}
+					
+					else if(arg1 == n16 || arg1 == m_a16 || arg2 == n16 || arg2 == m_a16) {
+						if(argcontent != romargcontent) {
+							errorInconsistentDataInstruction(opcode, arg1, arg2, argcontent, romopcode, romarg1, romarg2, romargcontent);
+							return -1;
+						}
+					}
+					
 				}
-				
-				mempos++;
-				
-				if(arg1 == n8 || arg1 == e8 || arg1 == m_a8) {
-					if(arg1content < 0) arg1content = (~(-arg1content) & 0xFF) + 1;
-					rombyte = fgetc(romfile);
-					arg1content &= 0xFF;
-					if(rombyte != (unsigned char) arg1content) {
-						errorInconsistentDataFirstarg(rombyte, arg1content);
+			} else {
+				romdata = fgetc(romfile);
+				for(unsigned int i = 0; i < sizeof(PREFIXED_INSTRUCTIONS)/sizeof(struct instruction); i++) if(PREFIXED_INSTRUCTIONS[i].byte == romdata)  {
+					enum asmopcode romopcode = PREFIXED_INSTRUCTIONS[i].opcode;
+					enum asmarg romarg1 = PREFIXED_INSTRUCTIONS[i].arg1;
+					enum asmarg romarg2 = PREFIXED_INSTRUCTIONS[i].arg2;
+					
+					if(opcode != romopcode || arg1 != romarg1 || arg2 != romarg2) {
+						errorInconsistentDataInstruction(opcode, arg1, arg2, 0, romopcode, romarg1, romarg2, 0);
 						return -1;
 					}
-					mempos++;
-				} else if(arg1 == n16 || arg1 == m_a16) {
-					if(arg1content < 0) arg1content = (~(-arg1content) & 0xFFFF) + 1;
-					rombyte = (unsigned char) fgetc(romfile);
-					unsigned int romword = rombyte | (fgetc(romfile) << 8);
-					arg1content &= 0xFFFF;
-					if(romword != arg1content) {
-						errorInconsistentDataFirstarg(romword, arg1content);
-						return -1;
-					}
-					mempos++;
-					mempos++;
 				}
-				
-				if(arg2 == n8 || arg2 == e8 || arg2 == m_a8) {
-					if(arg2content < 0) arg2content = (~(-arg2content) & 0xFF) + 1;
-					rombyte = fgetc(romfile);
-					arg2content &= 0xFF;
-					if(rombyte != (unsigned char) arg2content) {
-						errorInconsistentDataSecondarg(rombyte, arg2content);
-						return -1;
-					}
-					mempos++;
-				} else if(arg2 == n16 || arg2 == m_a16) {
-					if(arg2content < 0) arg2content = (~(-arg2content)) & 0xFFFF + 1;
-					rombyte = (unsigned char) fgetc(romfile);
-					unsigned int romword = rombyte | (fgetc(romfile) << 8);
-					arg1content &= 0xFFFF;
-					if(romword != arg2content) {
-						errorInconsistentDataSecondarg(romword, arg2content);
-						return -1;
-					}
-					mempos++;
-					mempos++;
-				}
-				
-				break;
 			}
 		}
 		
-		if(i >= sizeof(INSTRUCTIONS)/sizeof(struct instruction)) {
-			for(i = 0; i < sizeof(PREFIXED_INSTRUCTIONS)/sizeof(struct instruction); i++) {
-				if(opcode == PREFIXED_INSTRUCTIONS[i].opcode && arg1 == PREFIXED_INSTRUCTIONS[i].arg1 && arg2 == PREFIXED_INSTRUCTIONS[i].arg2) {
-					if(fgetc(romfile) != 0xCB) {
-						errorInconsistentDataOpcode(0xCB, PREFIXED_INSTRUCTIONS[i].byte);
-						return -1;
-					}
-					unsigned char rombyte = (unsigned char) fgetc(romfile);
-					if(rombyte != PREFIXED_INSTRUCTIONS[i].byte) {
-						errorInconsistentDataOpcode(rombyte, PREFIXED_INSTRUCTIONS[i].byte);
-						return -1;
-					}
-					
-					mempos++;
-					mempos++;
-					
-					break;
-				}
-			} if(i >= sizeof(PREFIXED_INSTRUCTIONS)/sizeof(struct instruction)) {
-				errorUnknownInstruction(opcode, arg1, arg2);
-				return -1;
-			}
-		}}
+		mempos++;
+		if(arg1 == n8 || arg1 == e8 || arg1 == m_a8 || arg2 == n8 || arg2 == e8 || arg2 == m_a8 || arg2 == SPe8) mempos++;
+		else if(arg1 == n16 || arg1 == m_a16 || arg2 == n16 || arg2 == m_a16) mempos += 2;
+		if(opcode >= RLC && opcode <= SET) mempos++;
+		
+		token = assertNextLineBreak();
 		
 		break;
 	}
@@ -3144,21 +3838,93 @@ int processNextStatement() {
 				saveAsmPos();
 				token = identifyNextToken();
 				if(token.type == STRING) {
-					if(mempos >= 0x8000) {
+					if((mempos & 0xFFFF) >= 0x8000 && !loadlabels) {
 						errorSectionCannotContainData();
 						return -1;
 					}
-					char* data = mapstring((char*)token.content);
+					unsigned char* data = mapstring((char*)token.content);
+					long romfilepos = ftell(romfile);
 					for(unsigned int i = 0; data[i] != '\0'; i++) {
-						unsigned char romdata = fgetc(romfile);
-						if(data[i] != romdata) {
-							errorInconsistentData(romdata, data[i]);
-							return -1;
+						if(!loadlabels) {
+							unsigned char romdata = fgetc(romfile);
+							if(data[i] != romdata) {
+								if(data[strlen(data)-1] == 0x50 && currentmacro == 0) {
+									
+									// edit asm file to match rom file
+									// create the new asmfile
+									FILE* newasmfile = fopen("edit", "wb");
+									if(newasmfile == NULL) {
+										printf("Failed to create %s.\n", asmpath);
+										return -1;
+									}
+									
+									
+									// copy the code up to 'db "'
+									saveAsmPos();
+									rewind(asmfile);
+									while(ftell(newasmfile) < savedasmfilepos - strlen((char*)token.content)-1) {
+										char c = fgetc(asmfile);
+										fputc(c, newasmfile);
+									}
+									restoreAsmPos();
+									
+									
+									// insert the new text
+									fseek(romfile, romfilepos, SEEK_SET);
+									unsigned char romdata = 0;
+									while(romdata != 0x50) {
+										romdata = fgetc(romfile);
+										mempos++;
+										unsigned int mapchar;
+										for(mapchar = charmapcount-1; mapchar >= 0; mapchar--) if(charms(mapchar).value == romdata) break;
+										fputs(charms(mapchar).chars, newasmfile);
+									}
+									fputc('\"', newasmfile);
+									long resumeasmfile = ftell(newasmfile);
+									
+									
+									// copy the rest of the code
+									char c = getNextChar();
+									while(feof(asmfile) == 0) {
+										fputc(c, newasmfile);
+										c = getNextChar();
+									}
+									
+									
+									// back up the old asmfile
+									char bakpath[strlen(asmpath)+strlen(".bak")+1];
+									strcpy(bakpath, asmpath);
+									strcat(bakpath, ".bak");
+									FILE* bakfile = fopen(bakpath, "rb");
+									if(bakfile == NULL) {
+										fclose(asmfile);
+										rename(asmpath, bakpath);
+									} else {
+										fclose(bakfile);
+										fclose(asmfile);
+										remove(asmpath);
+									}
+		
+		
+									// replace the old asmfile with the new asmfile
+									fclose(newasmfile);
+									rename("edit", asmpath);
+									asmfile = fopen(asmpath, "rb");
+									fseek(asmfile, resumeasmfile, SEEK_SET);
+									
+									
+									break;
+									
+								} else {
+									errorInconsistentData(romdata, data[i]);
+									return -1;
+								}
+							}
 						}
 						mempos++;
 					}
 				} else if(token.type == NEWLINE) {
-					if(mempos < 0x8000) {
+					if(mempos < 0x8000 && !loadlabels) {
 						unsigned long romdata = fgetc(romfile);
 						if(romdata != 0) {
 							errorInconsistentData(romdata, 0);
@@ -3168,18 +3934,79 @@ int processNextStatement() {
 					mempos++;
 					break;
 				} else {
-					if(mempos >= 0x8000) {
-						errorSectionCannotContainData();
-						return -1;
-					}
-					long result;
-					unsigned long romdata = fgetc(romfile);
-					restoreAsmPos();
-					if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
-					if(result < 0) result = (~(-result) & 0xFF) + 1;
-					if(result != romdata) {
-						errorInconsistentData(romdata, result);
-						return -1;
+					if(!loadlabels) {
+						if((mempos & 0xFFFF) >= 0x8000) {
+							errorSectionCannotContainData();
+							return -1;
+						}
+						long result;
+						unsigned long romdata = fgetc(romfile);
+						restoreAsmPos();
+						long asmfilepos = ftell(asmfile);
+						if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
+						if(result < 0) result = (~(-result) & 0xFF) + 1;
+						if(result != romdata) {
+							if(currentmacro == 0 && false) {
+								
+								// edit asm file to match rom file
+								// create the new asmfile
+								FILE* newasmfile = fopen("edit", "wb");
+								if(newasmfile == NULL) {
+									printf("Failed to create %s.\n", asmpath);
+									return -1;
+								}
+								
+								
+								// copy the code up to 'db '
+								rewind(asmfile);
+								while(ftell(newasmfile) < asmfilepos) {
+									char c = fgetc(asmfile);
+									fputc(c, newasmfile);
+								}
+								restoreAsmPos();
+								
+								
+								// insert the new data
+								char decimalnum[8];
+								sprintf(decimalnum, "%d", romdata);
+								fputs(decimalnum, newasmfile);
+								long resumeasmfile = ftell(newasmfile);
+								
+								
+								// copy the rest of the code
+								char c = getNextChar();
+								while(feof(asmfile) == 0) {
+									fputc(c, newasmfile);
+									c = getNextChar();
+								}
+								
+								
+								// back up the old asmfile
+								char bakpath[strlen(asmpath)+strlen(".bak")+1];
+								strcpy(bakpath, asmpath);
+								strcat(bakpath, ".bak");
+								FILE* bakfile = fopen(bakpath, "rb");
+								if(bakfile == NULL) {
+									fclose(asmfile);
+									rename(asmpath, bakpath);
+								} else {
+									fclose(bakfile);
+									fclose(asmfile);
+									remove(asmpath);
+								}
+
+
+								// replace the old asmfile with the new asmfile
+								fclose(newasmfile);
+								rename("edit", asmpath);
+								asmfile = fopen(asmpath, "rb");
+								fseek(asmfile, resumeasmfile, SEEK_SET);
+								
+							} else {
+								errorInconsistentData(romdata, result);
+								return -1;
+							}
+						}
 					}
 					mempos++;
 				}
@@ -3199,22 +4026,24 @@ int processNextStatement() {
 				saveAsmPos();
 				token = identifyNextToken();
 				if(token.type == STRING) {
-					if(mempos >= 0x8000) {
+					if((mempos & 0xFFFF) >= 0x8000 && !loadlabels) {
 						errorSectionCannotContainData();
 						return -1;
 					}
-					char* data = mapstring((char*)token.content);
+					unsigned char* data = mapstring((char*)token.content);
 					for(unsigned int i = 0; data[i] != '\0'; i++) {
-						unsigned int romdata = fgetc(romfile) | (fgetc(romfile) << 8);
-						if((unsigned int)data[i] != romdata) {
-							errorInconsistentData(romdata, data[i]);
-							return -1;
+						if(!loadlabels) {
+							unsigned int romdata = fgetc(romfile) | (fgetc(romfile) << 8);
+							if((unsigned int)data[i] != romdata) {
+								errorInconsistentData(romdata, data[i]);
+								return -1;
+							}
 						}
 						mempos++;
 						mempos++;
 					}
 				} else if(token.type == NEWLINE) {
-					if(mempos < 0x8000) {
+					if(mempos < 0x8000 && !loadlabels) {
 						unsigned long romdata = fgetc(romfile);
 						if(romdata != 0) {
 							errorInconsistentData(romdata, 0);
@@ -3230,22 +4059,84 @@ int processNextStatement() {
 					mempos++;
 					break;
 				} else {
-					if(mempos >= 0x8000) {
-						errorSectionCannotContainData();
-						return -1;
+					if(!loadlabels) {
+						if((mempos & 0xFFFF) >= 0x8000) {
+							errorSectionCannotContainData();
+							return -1;
+						}
+						long result;
+						unsigned long romdata = fgetc(romfile) | (fgetc(romfile) << 8);
+						restoreAsmPos();
+						long asmfilepos = ftell(asmfile);
+						if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
+						if(result < 0) result = (~(-result) & 0xFFFF) + 1;
+						if(result != romdata) {
+							if(currentmacro == 0 && false) {
+								
+								// edit asm file to match rom file
+								// create the new asmfile
+								FILE* newasmfile = fopen("edit", "wb");
+								if(newasmfile == NULL) {
+									printf("Failed to create %s.\n", asmpath);
+									return -1;
+								}
+								
+								
+								// copy the code up to 'db '
+								rewind(asmfile);
+								while(ftell(newasmfile) < asmfilepos) {
+									char c = fgetc(asmfile);
+									fputc(c, newasmfile);
+								}
+								restoreAsmPos();
+								
+								
+								// insert the new data
+								char decimalnum[8];
+								sprintf(decimalnum, "%d", romdata);
+								fputs(decimalnum, newasmfile);
+								long resumeasmfile = ftell(newasmfile);
+								
+								
+								// copy the rest of the code
+								char c = getNextChar();
+								while(c == ',' || isNumber(c)) c = getNextChar();
+								while(feof(asmfile) == 0) {
+									fputc(c, newasmfile);
+									c = getNextChar();
+								}
+								
+								
+								// back up the old asmfile
+								char bakpath[strlen(asmpath)+strlen(".bak")+1];
+								strcpy(bakpath, asmpath);
+								strcat(bakpath, ".bak");
+								FILE* bakfile = fopen(bakpath, "rb");
+								if(bakfile == NULL) {
+									fclose(asmfile);
+									rename(asmpath, bakpath);
+								} else {
+									fclose(bakfile);
+									fclose(asmfile);
+									remove(asmpath);
+								}
+
+
+								// replace the old asmfile with the new asmfile
+								fclose(newasmfile);
+								rename("edit", asmpath);
+								asmfile = fopen(asmpath, "rb");
+								fseek(asmfile, resumeasmfile, SEEK_SET);
+								
+							} else {
+								errorInconsistentData(romdata, result);
+								return -1;
+							}
+						}
 					}
-					long result;
-					unsigned long romdata = fgetc(romfile) | (fgetc(romfile) << 8);
-					restoreAsmPos();
-					if(calculateExpressionWithAssumption(romdata, 16, &result) != 0) return -1;
-					if(result < 0) result = (~(-result) & 0xFFFF) + 1;
-					if(result != romdata) {
-						errorInconsistentData(romdata, result);
-						return -1;
-					}
+					mempos++;
+					mempos++;
 				}
-				mempos++;
-				mempos++;
 				saveAsmPos();
 				token = identifyNextToken();
 				if(token.type != COMMA) break;
@@ -3262,16 +4153,18 @@ int processNextStatement() {
 				saveAsmPos();
 				token = identifyNextToken();
 				if(token.type == STRING) {
-					if(mempos >= 0x8000) {
+					if((mempos & 0xFFFF) >= 0x8000 && !loadlabels) {
 						errorSectionCannotContainData();
 						return -1;
 					}
-					char* data = mapstring((char*)token.content);
+					unsigned char* data = mapstring((char*)token.content);
 					for(unsigned int i = 0; data[i] != '\0'; i++) {
-						unsigned long romdata = fgetc(romfile) | (fgetc(romfile) << 8) | (fgetc(romfile) << 16) | (fgetc(romfile) | 24);
-						if((unsigned long)data[i] != romdata) {
-							errorInconsistentData(romdata, data[i]);
-							return -1;
+						if(!loadlabels) {
+							unsigned long romdata = fgetc(romfile) | (fgetc(romfile) << 8) | (fgetc(romfile) << 16) | (fgetc(romfile) | 24);
+							if((unsigned long)data[i] != romdata) {
+								errorInconsistentData(romdata, data[i]);
+								return -1;
+							}
 						}
 						mempos++;
 						mempos++;
@@ -3279,7 +4172,7 @@ int processNextStatement() {
 						mempos++;
 					}
 				} else if(token.type == NEWLINE) {
-					if(mempos < 0x8000) {
+					if(mempos < 0x8000 && !loadlabels) {
 						unsigned long romdata = fgetc(romfile);
 						if(romdata != 0) {
 							errorInconsistentData(romdata, 0);
@@ -3307,24 +4200,26 @@ int processNextStatement() {
 					mempos++;
 					break;
 				} else {
-					if(mempos >= 0x8000) {
-						errorSectionCannotContainData();
-						return -1;
+					if(!loadlabels) {
+						if((mempos & 0xFFFF) >= 0x8000) {
+							errorSectionCannotContainData();
+							return -1;
+						}
+						long result;
+						unsigned long romdata = fgetc(romfile) | (fgetc(romfile) << 8) | (fgetc(romfile) << 16) | (fgetc(romfile) | 24);
+						restoreAsmPos();
+						if(calculateExpressionWithAssumption(romdata, 32, &result) != 0) return -1;
+						if(result < 0) result = (~(-result) & 0xFFFFFFFF) + 1;
+						if(result != romdata) {
+							errorInconsistentData(romdata, result);
+							return -1;
+						}
 					}
-					long result;
-					unsigned long romdata = fgetc(romfile) | (fgetc(romfile) << 8) | (fgetc(romfile) << 16) | (fgetc(romfile) | 24);
-					restoreAsmPos();
-					if(calculateExpressionWithAssumption(romdata, 32, &result) != 0) return -1;
-					if(result < 0) result = (~(-result) & 0xFFFFFFFF) + 1;
-					if(result != romdata) {
-						errorInconsistentData(romdata, result);
-						return -1;
-					}
+					mempos++;
+					mempos++;
+					mempos++;
+					mempos++;
 				}
-				mempos++;
-				mempos++;
-				mempos++;
-				mempos++;
 				saveAsmPos();
 				token = identifyNextToken();
 				if(token.type != COMMA) break;
@@ -3340,84 +4235,99 @@ int processNextStatement() {
 			long numfill;
 			unsigned char fillbytes[1024];
 			unsigned int fillbytecount = 0;
-			if(calculateExpression(&numfill) != 0) return -1;
+			int calcresult = calculateExpression(&numfill);
+			if(calcresult == 1) {
+				errorUnableToCalculate();
+				return -1;
+			} if(calcresult != 0) return -1;
+			
 			saveAsmPos();
 			token = identifyNextToken();
 			if(token.type == COMMA) {
-				saveAsmPos();
-				token = identifyNextToken();
-			}
-			if(token.type != NEWLINE) {
-				if(mempos >= 0x8000) {
-printf("%s ", TOKEN_STRINGS[token.type]);
-if(charisliteral) printf("literal ");
+				if((mempos&0xFFFF) >= 0x8000 && !loadlabels) {
 					errorSectionCannotContainData();
 					return -1;
 				}
+				
 				long romfilepos = ftell(romfile);
-				restoreAsmPos();
-				token.type = COMMA;
 				while(token.type == COMMA) {
 					saveAsmPos();
 					token = identifyNextToken();
 					if(token.type == STRING) {
-						char* data = mapstring((char*)token.content);
-						for(unsigned int i = 0; data[i] != '\0'; i++) {
-							fillbytes[fillbytecount++] = data[i];
-						}
+						unsigned char* data = mapstring((char*)token.content);
+						for(unsigned int i = 0; data[i] != '\0'; i++) fillbytes[fillbytecount++] = data[i];
+						free(data);
 					} else {
 						restoreAsmPos();
-						long result;
-						unsigned long romdata = fgetc(romfile);
-						if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
-						if(result < 0) result = (~(-result) & 0xFF) + 1;
-						fillbytes[fillbytecount++] = (unsigned char) (result & 0xFF);
+						if(!loadlabels) {
+							long result;
+							unsigned long romdata = fgetc(romfile);
+							if(calculateExpressionWithAssumption(romdata, 8, &result) != 0) return -1;
+							if(result < 0) result = (~(-result) & 0xFF) + 1;
+							fillbytes[fillbytecount++] = (unsigned char) (result & 0xFF);
+						}
 					}
 					saveAsmPos();
 					token = identifyNextToken();
 				}
+				restoreAsmPos();
 				fseek(romfile, romfilepos, SEEK_SET);
-			}
-			restoreAsmPos();
-			unsigned int ii = 0;
-			for(unsigned int i = 0; i < numfill; i++) {
-				if(mempos < 0x8000) {
-					unsigned char romdata = fgetc(romfile);
-					if(fillbytes[ii++] != romdata) {
-						errorInconsistentData(romdata, romdata);
+				
+				unsigned int ii = 0;
+				for(unsigned int i = 0; i < numfill; i++) {
+					if((mempos&0xFFFF) < 0x8000 && !loadlabels) {
+						unsigned char romdata = fgetc(romfile);
+						if(fillbytes[ii++] != romdata) {
+							errorInconsistentData(romdata, fillbytes[ii-1]);
+							return -1;
+						}
+						ii %= fillbytecount;
 					}
-					ii %= fillbytecount;
+					mempos++;
 				}
-				mempos++;
 			}
+			
+			else {
+				restoreAsmPos();
+				for(unsigned int i = 0; i < numfill; i++) {
+					if((mempos&0xFFFF) < 0x8000 && !loadlabels && !(mempos >= 0x000104 && mempos <= 0x000150)) {
+						unsigned char romdata = fgetc(romfile);
+						if(romdata != 0) {
+							errorInconsistentData(romdata, 0);
+							return -1;
+						}
+					}
+					mempos++;
+				}
+			}
+			
 			break;}
 		
 		
 		
-		case DIR_CHARMAP:
-			token = identifyNextToken();
-			if(token.type != STRING) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+		case DIR_CHARMAP: {
+			token = assertNextTokenType(STRING);
 			charms(charmapcount).chars = malloc(strlen((char*)token.content)+1);
 			strcpy(charms(charmapcount).chars, (char*)token.content);
-			token = identifyNextToken();
-			if(token.type != COMMA) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(COMMA);
 			long result;
-			if(calculateExpression(&result) != 0) return -1;
+			int calcresult = calculateExpression(&result);
+			if(calcresult == 1) break;
+			if(calcresult != 0) return -1;
 			charms(charmapcount).value = result;
 			incrementCharmaplist;
-			break;
+			break;}
 		
 		
 		
 		case DIR_RSSET:{
 			long result;
-			if(calculateExpression(&result) != 0) return -1;
+			int calcresult = calculateExpression(&result);
+			if(calcresult == 1) {
+				errorUnableToCalculate();
+				return -1;
+			}
+			if(calcresult != 0) return -1;
 			_RS = result;
 			break;}
 		
@@ -3430,21 +4340,25 @@ if(charisliteral) printf("literal ");
 		case DIR_MACRO:
 			// macro name
 			token = identifyNextToken();
-			if(token.type != UNRECORDED_SYMBOL) {
-				errorUnexpectedToken(token);
-				return -1;
+			if(token.type == MACRO) {
+				charisliteral = true;
+				while(token.type != DIRECTIVE || token.content != DIR_ENDM) token = identifyNextToken();
+				charisliteral = false;
+				break;
+			} else if(token.type == TEXT_MACRO) {
+				token.type = UNRECORDED_SYMBOL;
+				strcpy(symbolstr, "text_far");
+				token.content = (unsigned int) symbolstr;
 			}
+			assertTokenType(token, UNRECORDED_SYMBOL);
+			
 			macros(macrocount).name = malloc(strlen((char*)token.content)+1);
 			strcpy(macros(macrocount).name, (char*)token.content);
+			macros(macrocount).content = malloc(1024);
 			
-			token = identifyNextToken();
-			if(token.type != NEWLINE && token.type != END_OF_FILE) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextLineBreak();
 			
 			// macro content
-			macros(macrocount).content = malloc(1024);
 			unsigned int i = 0;
 			unsigned char c;
 			unsigned char dirword[6];
@@ -3457,15 +4371,15 @@ if(charisliteral) printf("literal ");
 					while(c != '\n') c = getNextChar(asmfile);
 					if(currentmacro == 0) linenumber++;
 				}
-				if(isWhitespace(c) && (isWhitespace(macros(macrocount).content[i-1]) || macros(macrocount).content[i-1] == '\n' || i == 0)) continue;
-				if(c == '\n' && (isWhitespace(macros(macrocount).content[i-1]) || macros(macrocount).content[i-1] == '\n')) i--;
+				if(isWhitespace(c) && (isWhitespace(i == 0 || macros(macrocount).content[i-1]) || macros(macrocount).content[i-1] == '\n')) continue;
+				if(c == '\n' && i > 0 && (isWhitespace(macros(macrocount).content[i-1]) || macros(macrocount).content[i-1] == '\n')) i--;
 				if((isWhitespace(c) || c == '\n') && dirwordi < 6) {
 					dirword[dirwordi] = '\0';
-					if(strcmp(dirword, DIRECTIVE_STRINGS[DIR_MACRO]) == 0) {
+					if(strcmp(dirword, DIRECTIVES[DIR_MACRO]) == 0) {
 						errorNestedMacros();
 						return -1;
 					}
-					if(strcmp(dirword, DIRECTIVE_STRINGS[DIR_ENDM]) == 0) break;
+					if(strcmp(dirword, DIRECTIVES[DIR_ENDM]) == 0) break;
 				}
 				if(c == '\n') dirwordi = 0;
 				else if(isWhitespace(c) && dirwordi > 0) dirwordi = 6;
@@ -3478,7 +4392,7 @@ if(charisliteral) printf("literal ");
 				}
 			}
 			charisliteral = false;
-			i -= strlen(DIRECTIVE_STRINGS[DIR_ENDM]);
+			i -= strlen(DIRECTIVES[DIR_ENDM]);
 			while(isWhitespace(macros(macrocount).content[i-1])) i--;
 			macros(macrocount).content[i] = '\0';
 			macros(macrocount).content = realloc(macros(macrocount).content, i+1);
@@ -3487,10 +4401,47 @@ if(charisliteral) printf("literal ");
 			
 			break;
 		
+		case DIR_SHIFT:
+			if(currentmacro == 0) {
+				errorCannotShiftOutsideMacro();
+				return -1;
+			}
+			
+			unsigned int numshift = 1;
+			
+			saveAsmPos();
+			token = identifyNextToken();
+			restoreAsmPos();
+			if(token.type != NEWLINE && token.type != END_OF_FILE) {
+				long result;
+				int calcresult = calculateExpression(&result);
+				if(calcresult == 1) {
+					errorUnableToCalculate();
+					return -1;
+				}
+				if(calcresult != 0) return -1;
+				numshift = result;
+			}
+			
+			for(unsigned int i = 0; i < numshift; i++) {
+				free(currentargs[0]);
+				for(unsigned int i = 0; i < _NARG; i++) currentargs[i] = currentargs[i+1];
+				_NARG--;
+			}
+			
+			break;
+		
 		
 		
 		case DIR_DEF: {
+			indef = true;
 			struct token subject = identifyNextToken();
+			char* subjectname;
+			if(subject.type == UNRECORDED_SYMBOL) {
+				subjectname = malloc(strlen((char*)subject.content)+1);
+				strcpy(subjectname, (char*)subject.content);
+			}
+			indef = false;
 			token = identifyNextToken();
 			
 			if(token.type == OPERATOR) {
@@ -3540,10 +4491,27 @@ if(charisliteral) printf("literal ");
 					}
 					if(subject.type == VARIABLE) {
 						varbls(subject.content).value = varvalue;
+					} else if(subject.type == ASSUMPTION) {
+						varbls(variablecount) = (struct variable) { .name = asmpts(subject.content).name, .value = varvalue};
+// unsigned long soughtvalue = 0xCD68;
+// if(varbls(variablecount).value == soughtvalue) {
+// 	printLocation();
+// 	printf("\n%s is defined as %04X\n", varbls(variablecount).name, soughtvalue);
+// 	return -1;
+// }
+						incrementVariablelist;
+						if(assumptioncount % 1024 == 0) free(assumptionlist[assumptioncount/1024]);
+						assumptioncount--;
+						for(unsigned int i = subject.content; i < assumptioncount; i++) asmpts(i) = asmpts(i+1);
 					} else if(subject.type == UNRECORDED_SYMBOL) {
 						varbls(variablecount).value = varvalue;
-						varbls(variablecount).name = malloc(strlen((char*)subject.content)+1);
-						strcpy(varbls(variablecount).name, (char*)subject.content);
+						varbls(variablecount).name = subjectname;
+// unsigned long soughtvalue = 0xCD68;
+// if(varbls(variablecount).value == soughtvalue) {
+// 	printLocation();
+// 	printf("\n%s is defined as %04X\n", varbls(variablecount).name, soughtvalue);
+// 	return -1;
+// }
 						incrementVariablelist;
 					} else {
 						errorUnexpectedToken(subject);
@@ -3551,35 +4519,71 @@ if(charisliteral) printf("literal ");
 					}
 				} else if(procresult == 1 && subject.type == VARIABLE) {
 					free(varbls(subject.content).name);
+					if(variablecount % 1024 == 0) free(variablelist[variablecount/1024]);
 					variablecount--;
 					for(unsigned int i = subject.content; i < variablecount; i++) varbls(i) = varbls(i+1);
 				}
 			}
 			
 			else if(token.type == DIRECTIVE && token.content == DIR_EQU) {
-				if(subject.type != UNRECORDED_SYMBOL) {
+				long result;
+				int calcresult = calculateExpression(&result);
+				if(calcresult == 1) {
+					errorUnableToCalculate();
+					return -1;
+				} if(calcresult != 0) return -1;
+				if(subject.type == UNRECORDED_SYMBOL) {
+					consts(constantcount).name = subjectname;
+					consts(constantcount).value = result;
+// unsigned long soughtvalue = 0xCD68;
+// if(consts(constantcount).value == soughtvalue) {
+// 	printLocation();
+// 	printf("\n%s is defined as %04X\n", consts(constantcount).name, soughtvalue);
+// 	return -1;
+// }
+					incrementConstantlist;
+				} else if(subject.type == ASSUMPTION) {
+					if((asmpts(subject.content).l && (result & 0xFF) != asmpts(subject.content).valuel) ||
+						(asmpts(subject.content).m && ((result >> 8) & 0xFF) != asmpts(subject.content).valuem) ||
+						(asmpts(subject.content).h && ((result >> 16) & 0xFF) != asmpts(subject.content).valueh)) {
+						errorIncorrectAssumption(asmpts(subject.content).name, result, 0 | (asmpts(subject.content).l ? asmpts(subject.content).valuel : 0)
+							| (asmpts(subject.content).m ? (asmpts(subject.content).valuem << 8) : 0) | (asmpts(subject.content).h ? (asmpts(subject.content).valueh << 16) : 0));
+						return -1;
+					}
+					consts(constantcount) = (struct constant) { .name = asmpts(subject.content).name, .value = result};
+// unsigned long soughtvalue = 0xCD68;
+// if(consts(constantcount).value == soughtvalue) {
+// 	printLocation();
+// 	printf("\n%s is defined as %04X\n", consts(constantcount).name, soughtvalue);
+// 	return -1;
+// }
+					incrementConstantlist;
+					if(assumptioncount % 1024 == 0) free(assumptionlist[assumptioncount/1024]);
+					assumptioncount--;
+					for(unsigned int i = subject.content; i < assumptioncount; i++) asmpts(i) = asmpts(i+1);
+				} else if(subject.type == CONSTANT) {
+					consts(subject.content).value = result;
+				} else {
 					errorUnexpectedToken(subject);
 					return -1;
 				}
-				consts(constantcount).name = malloc(strlen((char*)subject.content)+1);
-				strcpy(consts(constantcount).name, (char*)subject.content);
-				long result;
-				if(calculateExpression(&result) != 0) return -1;
-				consts(constantcount).value = result;
-				incrementConstantlist;
 			}
 			
 			else if(token.type == DIRECTIVE && token.content == DIR_EQUS) {
-				if(subject.type != UNRECORDED_SYMBOL) {
-					errorUnexpectedToken(subject);
-					return -1;
-				}
-				costrs(conststrcount).name = malloc(strlen((char*)subject.content)+1);
-				strcpy(costrs(conststrcount).name, (char*)subject.content);
-				token = identifyNextToken();
-				if(token.type != STRING) {
-					errorUnexpectedToken(token);
-					return -1;
+				assertTokenType(subject, UNRECORDED_SYMBOL); 
+				costrs(conststrcount).name = subjectname;
+				token = assertNextTokenType(STRING);
+				for(unsigned int i = 0; ((char*)token.content)[i] != '\0'; i++) {
+					if(((char*)token.content)[i] == '\\' && ((char*)token.content)[i+1] == '@') {
+						expandedstrs[expandedstrcount] = malloc(strlen((char*)token.content)+1);
+						strcpy(expandedstrs[expandedstrcount], (char*)token.content);
+						expandedstrspos[expandedstrcount] = 0;
+						expandedstrcount++;
+						indef = true;
+						token = identifyNextToken();
+						indef = false;
+						break;
+					}
 				}
 				costrs(conststrcount).content = malloc(strlen((char*)token.content)+1);
 				strcpy(costrs(conststrcount).content, (char*)token.content);
@@ -3587,7 +4591,7 @@ if(charisliteral) printf("literal ");
 			}
 			
 			else if(token.type == DIRECTIVE && token.content == DIR_RB) {
-				if(subject.type != UNRECORDED_SYMBOL) {
+				if(subject.type != UNRECORDED_SYMBOL && subject.type != CONSTANT) {
 					errorUnexpectedToken(subject);
 					return -1;
 				}
@@ -3598,18 +4602,32 @@ if(charisliteral) printf("literal ");
 				if(token.type == NEWLINE || token.type == END_OF_FILE) constexpr = 1;
 				else {
 					long result;
-					if (calculateExpression(&result) != 0) return -1;
+					int calcresult = calculateExpression(&result);
+					if(calcresult == 1) {
+						errorUnableToCalculate();
+						return -1;
+					} if(calcresult != 0) return -1;
 					constexpr = (unsigned int) result;
 				}
-				consts(constantcount).name = malloc(strlen((char*)subject.content)+1);
-				strcpy(consts(constantcount).name, (char*)subject.content);
-				consts(constantcount).value = constexpr;
-				incrementConstantlist;
+				if(subject.type == UNRECORDED_SYMBOL) {
+					consts(constantcount).name = subjectname;
+					consts(constantcount).value = _RS;
+// unsigned long soughtvalue = 0xCD68;
+// if(consts(constantcount).value == soughtvalue) {
+// 	printLocation();
+// 	printf("\n%s is defined as %04X\n", consts(constantcount).name, soughtvalue);
+// 	return -1;
+// }
+					incrementConstantlist;
+				} else if(consts(subject.content).value != constexpr) {
+					errorRedefinitionOfConstant(consts(subject.content));
+					return -1;
+				}
 				_RS += constexpr;
 			}
 			
 			else if(token.type == DIRECTIVE && token.content == DIR_RW) {
-				if(subject.type != UNRECORDED_SYMBOL) {
+				if(subject.type != UNRECORDED_SYMBOL && subject.type != CONSTANT) {
 					errorUnexpectedToken(subject);
 					return -1;
 				}
@@ -3620,19 +4638,33 @@ if(charisliteral) printf("literal ");
 				if(token.type == NEWLINE || token.type == END_OF_FILE) constexpr = 1;
 				else {
 					long result;
-					if (calculateExpression(&result) != 0) return -1;
+					int calcresult = calculateExpression(&result);
+					if(calcresult == 1) {
+						errorUnableToCalculate();
+						return -1;
+					} if(calcresult != 0) return -1;
 					constexpr = (unsigned int) result;
 				}
 				constexpr *= 2;
-				consts(constantcount).name = malloc(strlen((char*)subject.content)+1);
-				strcpy(consts(constantcount).name, (char*)subject.content);
-				consts(constantcount).value = constexpr;
-				incrementConstantlist;
+				if(subject.type == UNRECORDED_SYMBOL) {
+					consts(constantcount).name = subjectname;
+					consts(constantcount).value = _RS;
+// unsigned long soughtvalue = 0xCD68;
+// if(consts(constantcount).value == soughtvalue) {
+// 	printLocation();
+// 	printf("\n%s is defined as %04X\n", consts(constantcount).name, soughtvalue);
+// 	return -1;
+// }
+					incrementConstantlist;
+				} else if(consts(subject.content).value != constexpr) {
+					errorRedefinitionOfConstant(consts(subject.content));
+					return -1;
+				}
 				_RS += constexpr;
 			}
 			
 			else if(token.type == DIRECTIVE && token.content == DIR_RL) {
-				if(subject.type != UNRECORDED_SYMBOL) {
+				if(subject.type != UNRECORDED_SYMBOL && subject.type != CONSTANT) {
 					errorUnexpectedToken(subject);
 					return -1;
 				}
@@ -3643,14 +4675,28 @@ if(charisliteral) printf("literal ");
 				if(token.type == NEWLINE || token.type == END_OF_FILE) constexpr = 1;
 				else {
 					long result;
-					if (calculateExpression(&result) != 0) return -1;
+					int calcresult = calculateExpression(&result);
+					if(calcresult == 1) {
+						errorUnableToCalculate();
+						return -1;
+					} if(calcresult != 0) return -1;
 					constexpr = (unsigned int) result;
 				}
 				constexpr *= 4;
-				consts(constantcount).name = malloc(strlen((char*)subject.content)+1);
-				strcpy(consts(constantcount).name, (char*)subject.content);
-				consts(constantcount).value = constexpr;
-				incrementConstantlist;
+				if(subject.type == UNRECORDED_SYMBOL) {
+					consts(constantcount).name = subjectname;
+					consts(constantcount).value = _RS;
+// unsigned long soughtvalue = 0xCD68;
+// if(consts(constantcount).value == soughtvalue) {
+// 	printLocation();
+// 	printf("\n%s is defined as %04X\n", consts(constantcount).name, soughtvalue);
+// 	return -1;
+// }
+					incrementConstantlist;
+				} else if(consts(subject.content).value != constexpr) {
+					errorRedefinitionOfConstant(consts(subject.content));
+					return -1;
+				}
 				_RS += constexpr;
 			}
 			
@@ -3662,9 +4708,14 @@ if(charisliteral) printf("literal ");
 			break;}
 		
 		case DIR_REDEF: {
-			charisliteral = true;
+			indef = true;
 			struct token subject = identifyNextToken();
-			charisliteral = false;
+			char* subjectname;
+			if(subject.type == UNRECORDED_SYMBOL) {
+				subjectname = malloc(strlen((char*)subject.content)+1);
+				strcpy(subjectname, (char*)subject.content);
+			}
+			indef = false;
 			token = identifyNextToken();
 			
 			if(token.type == OPERATOR) {
@@ -3716,8 +4767,7 @@ if(charisliteral) printf("literal ");
 						varbls(subject.content).value = varvalue;
 					} else if(subject.type == UNRECORDED_SYMBOL) {
 						varbls(variablecount).value = varvalue;
-						varbls(variablecount).name = malloc(strlen((char*)subject.content)+1);
-						strcpy(varbls(variablecount).name, (char*)subject.content);
+						varbls(variablecount).name = subjectname;
 						incrementVariablelist;
 					} else {
 						errorUnexpectedToken(subject);
@@ -3725,22 +4775,37 @@ if(charisliteral) printf("literal ");
 					}
 				} else if(procresult == 1 && subject.type == VARIABLE) {
 					free(varbls(subject.content).name);
+					if(variablecount % 1024 == 0) free(variablelist[variablecount/1024]);
 					variablecount--;
 					for(unsigned int i = subject.content; i < variablecount; i++) varbls(i) = varbls(i+1);
 				}
 			}
 			
 			else if(token.type == DIRECTIVE && token.content == DIR_EQU) {
+				long result;
+				int calcresult = calculateExpression(&result);
+				if(calcresult == 1) {
+					errorUnableToCalculate();
+					return -1;
+				} if(calcresult != 0) return -1;
 				if(subject.type == UNRECORDED_SYMBOL) {
-					consts(constantcount).name = malloc(strlen((char*)subject.content)+1);
-					strcpy(consts(constantcount).name, (char*)subject.content);
-					long result;
-					if(calculateExpression(&result) != 0) return -1;
+					consts(constantcount).name = subjectname;
 					consts(constantcount).value = result;
 					incrementConstantlist;
+				} else if(subject.type == ASSUMPTION) {
+					if((asmpts(subject.content).l && (result & 0xFF) != asmpts(subject.content).valuel) ||
+						(asmpts(subject.content).m && ((result >> 8) & 0xFF) != asmpts(subject.content).valuem) ||
+						(asmpts(subject.content).h && ((result >> 16) & 0xFF) != asmpts(subject.content).valueh)) {
+						errorIncorrectAssumption(asmpts(subject.content).name, result, 0 | (asmpts(subject.content).l ? asmpts(subject.content).valuel : 0)
+							| (asmpts(subject.content).m ? (asmpts(subject.content).valuem << 8) : 0) | (asmpts(subject.content).h ? (asmpts(subject.content).valueh << 16) : 0));
+						return -1;
+					}
+					consts(constantcount) = (struct constant) { .name = asmpts(subject.content).name, .value = result};
+					incrementConstantlist;
+					if(assumptioncount % 1024 == 0) free(assumptionlist[assumptioncount/1024]);
+					assumptioncount--;
+					for(unsigned int i = subject.content; i < assumptioncount; i++) asmpts(i) = asmpts(i+1);
 				} else if(subject.type == CONSTANT) {
-					long result;
-					if(calculateExpression(&result) != 0) return -1;
 					consts(subject.content).value = result;
 				} else {
 					errorUnexpectedToken(subject);
@@ -3750,18 +4815,38 @@ if(charisliteral) printf("literal ");
 			
 			else if(token.type == DIRECTIVE && token.content == DIR_EQUS) {
 				if(subject.type == UNRECORDED_SYMBOL) {
-					costrs(conststrcount).name = malloc(strlen((char*)subject.content)+1);
-					strcpy(costrs(conststrcount).name, (char*)subject.content);
-					token = identifyNextToken();
-					if(token.type != STRING) {
-						errorUnexpectedToken(token);
-						return -1;
+					costrs(conststrcount).name = subjectname;
+					token = assertNextTokenType(STRING);
+					for(unsigned int i = 0; ((char*)token.content)[i] != '\0'; i++) {
+						if(((char*)token.content)[i] == '\\' && ((char*)token.content)[i+1] == '@') {
+							expandedstrs[expandedstrcount] = malloc(strlen((char*)token.content)+1);
+							strcpy(expandedstrs[expandedstrcount], (char*)token.content);
+							expandedstrspos[expandedstrcount] = 0;
+							expandedstrcount++;
+							indef = true;
+							token = identifyNextToken();
+							indef = false;
+							break;
+						}
 					}
 					costrs(conststrcount).content = malloc(strlen((char*)token.content)+1);
 					strcpy(costrs(conststrcount).content, (char*)token.content);
 					incrementConststrlist;
 				} else if(subject.type == CONSTANT_STRING) {
 					free(costrs(subject.content).content);
+					token = assertNextTokenType(STRING);
+					for(unsigned int i = 0; ((char*)token.content)[i] != '\0'; i++) {
+						if(((char*)token.content)[i] == '\\' && ((char*)token.content)[i+1] == '@') {
+							expandedstrs[expandedstrcount] = malloc(strlen((char*)token.content)+1);
+							strcpy(expandedstrs[expandedstrcount], (char*)token.content);
+							expandedstrspos[expandedstrcount] = 0;
+							expandedstrcount++;
+							indef = true;
+							token = identifyNextToken();
+							indef = false;
+							break;
+						}
+					}
 					costrs(subject.content).content = malloc(strlen((char*)token.content)+1);
 					strcpy(costrs(subject.content).content, (char*)token.content);
 				} else {
@@ -3776,101 +4861,220 @@ if(charisliteral) printf("literal ");
 			}
 			
 			break;}
+		
+		case DIR_PURGE:
+			while(true) {
+				indef = true;
+				token = identifyNextToken();
+				indef = false;
+				switch(token.type) {
+				case LABEL:
+					free(labels(token.content).name);
+					if(labelcount % 1024 == 0) free(labellist[labelcount/1024]);
+					labelcount--;
+					for(unsigned int i = token.content; i < labelcount; i++) labels(i) = labels(i+1);
+					break;
+				case ASSUMPTION:
+					free(asmpts(token.content).name);
+					if(assumptioncount % 1024 == 0) free(assumptionlist[assumptioncount/1024]);
+					assumptioncount--;
+					for(unsigned int i = token.content; i < assumptioncount; i++) asmpts(i) = asmpts(i+1);
+					break;
+				case MACRO:
+					free(macros(token.content).name);
+					free(macros(token.content).content);
+					if(macrocount % 1024 == 0) free(macrolist[macrocount/1024]);
+					macrocount--;
+					for(unsigned int i = token.content; i < macrocount; i++) macros(i) = macros(i+1);
+					break;
+				case VARIABLE:
+					free(varbls(token.content).name);
+					for(unsigned int i = token.content; i < variablecount-1; i++) varbls(i) = varbls(i+1);
+					if(variablecount % 1024 == 0) free(variablelist[variablecount/1024]);
+					variablecount--;
+					break;
+				case CONSTANT:
+					free(consts(token.content).name);
+					if(constantcount % 1024 == 0) free(constantlist[constantcount/1024]);
+					constantcount--;
+					for(unsigned int i = token.content; i < constantcount; i++) consts(i) = consts(i+1);
+					break;
+				case CONSTANT_STRING:
+					free(costrs(token.content).name);
+					free(costrs(token.content).content);
+					if(conststrcount % 1024 == 0) free(conststrlist[conststrcount/1024]);
+					conststrcount--;
+					for(unsigned int i = token.content; i < conststrcount; i++) costrs(i) = costrs(i+1);
+					break;
+				}
+				
+				saveAsmPos();
+				token = identifyNextToken();
+				if(token.type != COMMA) break;
+			}
+			restoreAsmPos();
 			
+			break;
+		
+		case DIR_EXPORT:
+			token = identifyNextToken();
+			switch(token.type) {
+				case LABEL:
+				case ASSUMPTION:
+				case MACRO:
+				case VARIABLE:
+				case CONSTANT:
+				case CONSTANT_STRING:
+					break;
+				default:
+					errorUnexpectedToken(token);
+					break;
+			}
 			
-			
+			break;
+		
+		
+		
 		case DIR_IF:
 			while(true) {
 				long result;
-				if(calculateExpression(&result) != 0) return -1;
+				int calcresult = calculateExpression(&result);
+				if(calcresult == 1) {
+					errorUnableToCalculate();
+					return -1;
+				} if(calcresult != 0) return -1;
 				if(result != 0) {
 					ifdepth++;
 					break;
 				}
-				token = identifyNextToken();
-				if(token.type != NEWLINE && token.type != END_OF_FILE) {
-					errorUnexpectedToken(token);
-					return -1;
-				}
+				
+				token = assertNextLineBreak();
+				
 				unsigned int localifdepth = 0;
 				charisliteral = true;
+				bool wasdebug = debug;
+				debug = false;
 				while(token.type != DIRECTIVE || (token.content != DIR_ELIF && token.content != DIR_ELSE && token.content != DIR_ENDC) || localifdepth != 0) {
 					if(token.type == DIRECTIVE && token.content == DIR_IF) localifdepth++;
 					if(token.type == DIRECTIVE && token.content == DIR_ENDC) localifdepth--;
 					token = identifyNextToken();
 				}
+				debug = wasdebug;
 				charisliteral = false;
 				if(token.content == DIR_ELIF) continue;
 				if(token.content == DIR_ELSE) ifdepth++;
 				break;
 			}
 			break;
-			
+		
 		case DIR_ELIF:
 		case DIR_ELSE:
 			if(ifdepth == 0) {
 				errorUnexpectedToken(token);
 				return -1;
 			}
-			while(token.type != DIRECTIVE || token.content != DIR_ENDC) token = identifyNextToken();
+			
+			unsigned int localifdepth = 0;
+			charisliteral = true;
+			bool wasdebug = debug;
+			debug = false;
+			while(token.type != DIRECTIVE || token.content != DIR_ENDC || localifdepth != 0) {
+				if(token.type == DIRECTIVE && token.content == DIR_IF) localifdepth++;
+				if(token.type == DIRECTIVE && token.content == DIR_ENDC) localifdepth--;
+				token = identifyNextToken();
+			}
+			debug = wasdebug;
+			charisliteral = false;
+		
 		case DIR_ENDC:
 			ifdepth--;
 			break;
 			
 			
-			
+		
 		case DIR_FOR:
 			token = identifyNextToken();
-			if(token.type != UNRECORDED_SYMBOL) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
 			unsigned char returnrepeatsymbol[32];
 			strcpy(returnrepeatsymbol, repeatsymbol);
-			strcpy(repeatsymbol, (char*)token.content);
-			unsigned long returnrepeatcount = repeatcount;
-			
-			token = identifyNextToken();
-			if(token.type != COMMA) {
+			if(token.type == UNRECORDED_SYMBOL) strcpy(repeatsymbol, (char*)token.content);
+			else if(token.type == VARIABLE) strcpy(repeatsymbol, varbls(token.content).name);
+			else {
 				errorUnexpectedToken(token);
 				return -1;
 			}
+			unsigned long returnrepeatcount = repeatcount;
 			
-			unsigned long repeatstart;
+			token = assertNextTokenType(COMMA);
+			
+			unsigned long repeatstart = 0;
 			unsigned long repeatstop = 0;
 			unsigned long repeatstep = 1;
-			if(calculateExpression(&repeatstop) != 0) return -1;
+			int calcresult = calculateExpression(&repeatstop);
+			if(calcresult == 1) {
+				errorUnableToCalculate();
+				return -1;
+			} if(calcresult != 0) return -1;
 			
 			token = identifyNextToken();
 			if(token.type == COMMA) {
 				repeatstart = repeatstop;
-				if(calculateExpression(&repeatstop) != 0) return -1;
+				calcresult = calculateExpression(&repeatstop);
+				if(calcresult == 1) {
+					errorUnableToCalculate();
+					return -1;
+				} if(calcresult != 0) return -1;
 				
 				token = identifyNextToken();
 				if(token.type == COMMA) {
-					if(calculateExpression(&repeatstep) != 0) return -1;
+				calcresult = calculateExpression(&repeatstep);
+				if(calcresult == 1) {
+					errorUnableToCalculate();
+					return -1;
+				} if(calcresult != 0) return -1;
 					token = identifyNextToken();
 				}
 			}
 			
-			if(token.type != NEWLINE && token.type != END_OF_FILE) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
-			long repeatasmfilepos = ftell(asmfile);
+			assertLineBreak(token);
+			
+			long repeatasmfilepos;
+			unsigned int repeatpos;
+			unsigned char* repeatcurrentmacro = currentmacro;
+			unsigned int repeatexpandedstrcount = expandedstrcount;
+			if(currentmacro != 0) repeatpos = currentmacropos;
+			else if(expandedstrcount > 0) repeatpos = expandedstrspos[expandedstrcount];
+			else repeatasmfilepos = ftell(asmfile);
+			
 			unsigned int repeatlinenumber = linenumber;
 			unsigned int repeatungottencharcount = ungottencharcount;
+			
+			if(repeatstart == repeatstop) {
+				unsigned int localreptdepth = 0;
+				charisliteral = true;
+				bool wasdebug = debug;
+				debug = false;
+				while(token.type != DIRECTIVE || token.content != DIR_ENDR || localreptdepth != 0) {
+					if(token.type == DIRECTIVE && (token.content == DIR_REPT || token.content == DIR_FOR)) localreptdepth++;
+					if(token.type == DIRECTIVE && token.content == DIR_ENDR) localreptdepth--;
+					token = identifyNextToken();
+				}
+				debug = wasdebug;
+				charisliteral = false;
+			}
 			
 			bool wasrepeating = repeating;
 			repeating = true;
 			for(repeatcount = repeatstart; repeatcount < repeatstop; repeatcount += repeatstep) {
-				fseek(asmfile, repeatasmfilepos, SEEK_SET);
+				if(currentmacro != 0) currentmacropos = repeatpos;
+				else if(expandedstrcount > 0) expandedstrspos[expandedstrcount] = repeatpos;
+				else fseek(asmfile, repeatasmfilepos, SEEK_SET);
+				
 				linenumber = repeatlinenumber;
 				ungottencharcount = repeatungottencharcount;
 				
 				int statementresult = 0;
 				while(statementresult == 0) {
-				  if(debug) printf("\n%d. ", linenumber);
+				  if(debug && currentmacro == 0) printf("\n%d. ", linenumber);
 					statementresult = processNextStatement();
 				}
 				if(statementresult == 1) {
@@ -3889,30 +5093,55 @@ if(charisliteral) printf("literal ");
 			unsigned long returnrepeatcount = repeatcount;
 			
 			unsigned long repeatnum;
-			if(calculateExpression(&repeatnum) != 0) return -1;
-			
-			token = identifyNextToken();
-			if(token.type != NEWLINE && token.type != END_OF_FILE) {
-				errorUnexpectedToken(token);
+			int calcresult = calculateExpression(&repeatnum);
+			if(calcresult == 1) {
+				errorUnableToCalculate();
 				return -1;
-			}
-			long repeatasmfilepos = ftell(asmfile);
+			} if(calcresult != 0) return -1;
+			
+			token = assertNextLineBreak();
+			
+			long repeatasmfilepos;
+			unsigned int repeatpos;
+			unsigned char* repeatcurrentmacro = currentmacro;
+			unsigned int repeatexpandedstrcount = expandedstrcount;
+			if(currentmacro != 0) repeatpos = currentmacropos;
+			else if(expandedstrcount > 0) repeatpos = expandedstrspos[expandedstrcount];
+			else repeatasmfilepos = ftell(asmfile);
+			
 			unsigned int repeatlinenumber = linenumber;
 			unsigned int repeatungottencharcount = ungottencharcount;
+			
+			if(repeatnum == 0) {
+				unsigned int localreptdepth = 0;
+				charisliteral = true;
+				bool wasdebug = debug;
+				debug = false;
+				while(token.type != DIRECTIVE || token.content != DIR_ENDR || localreptdepth != 0) {
+					if(token.type == DIRECTIVE && (token.content == DIR_REPT || token.content == DIR_FOR)) localreptdepth++;
+					if(token.type == DIRECTIVE && token.content == DIR_ENDR) localreptdepth--;
+					token = identifyNextToken();
+				}
+				debug = wasdebug;
+				charisliteral = false;
+			}
 			
 			bool wasrepeating = repeating;
 			repeating = true;
 			for(repeatcount = 0; repeatcount < repeatnum; repeatcount++) {
-				fseek(asmfile, repeatasmfilepos, SEEK_SET);
+				if(currentmacro != 0) currentmacropos = repeatpos;
+				else if(expandedstrcount > 0) expandedstrspos[expandedstrcount] = repeatpos;
+				else fseek(asmfile, repeatasmfilepos, SEEK_SET);
+				
 				linenumber = repeatlinenumber;
 				ungottencharcount = repeatungottencharcount;
 				
 				int statementresult = 0;
 				while(statementresult == 0) {
-				  if(debug) printf("\n%d. ", linenumber);
+				  if(debug && currentmacro == 0) printf("\n%d. ", linenumber);
 					statementresult = processNextStatement();
 				}
-				if(statementresult == 1) {
+				if(statementresult == 1 || currentmacro != repeatcurrentmacro || expandedstrcount != repeatexpandedstrcount) {
 					errorReptWithoutEndr();
 					return -1;
 				}
@@ -3930,27 +5159,28 @@ if(charisliteral) printf("literal ");
 		
 		
 		
-		case DIR_INCLUDE:
+		case DIR_INCLUDE: {
 			if(currentsection[0] == '\0' && currentsection[1] == '\1') {
 				return 2;
 			}
 			
-			token = identifyNextToken();
-			if(token.type != STRING) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(STRING);
 			
 			FILE* returnasmfile = asmfile;
+			char* returnasmpath = asmpath;
 			long returnasmfilepos = ftell(asmfile);
 			char* initialsection = malloc(strlen(currentsection)+1);
 			strcpy(initialsection, currentsection);
 			unsigned int returnlinenumber = linenumber;
+			bool returnbackedup = asmfilebackedup;
 			asmfile = fopen((char*)token.content, "rb");
 			if(asmfile == NULL) {
-				printf("Cannot find assembly file \"%s\".\n", (char*)token.content);
+				errorCannotFindFile((char*)token.content);
 				return -1;
 			}
+			char newasmpath[strlen((char*)token.content)+1];
+			strcpy(newasmpath, (char*)token.content);
+			asmpath = newasmpath;
 			linenumber = 1;
 			
 		  if(debug) printf("\n\n%s:", (char*)token.content);
@@ -3963,47 +5193,130 @@ if(charisliteral) printf("literal ");
 			
 			if(statementresult != 1) return statementresult;
 			
+			asmpath = returnasmpath;
 			fclose(asmfile);
 			asmfile = returnasmfile;
 			fseek(asmfile, returnasmfilepos, SEEK_SET);
 			linenumber = returnlinenumber;
+			asmfilebackedup = returnbackedup;
 		  if(debug) printf("\n\n:");
+			
+			break;}
+		
+		case DIR_INCBIN:
+			token = assertNextTokenType(STRING);
+			
+			FILE* binfile = fopen((char*)token.content, "rb");
+			if(binfile == NULL) {
+				errorCannotFindFile((char*)token.content);
+				return -1;
+			}
+			
+			unsigned long binlength = -1;
+			
+			saveAsmPos();
+			token = identifyNextToken();
+			if(token.type == COMMA) {
+				long result;
+				int calcresult = calculateExpression(&result);
+				if(calcresult == 1) {
+					errorUnableToCalculate();
+					return -1;
+				}
+				if(calcresult != 0) return -1;
+				fseek(binfile, result, SEEK_SET);
+				
+				saveAsmPos();
+				token = identifyNextToken();
+				if(token.type == COMMA) {
+					calcresult = calculateExpression(&result);
+					if(calcresult == 1) {
+						errorUnableToCalculate();
+						return -1;
+					}
+					if(calcresult != 0) return -1;
+					binlength = result;
+				} else restoreAsmPos();
+			} else restoreAsmPos();
+			
+			unsigned char bindata = fgetc(binfile);
+			while(feof(binfile) == 0 && binlength > 0) {
+				unsigned char romdata = fgetc(romfile);
+				if(bindata != romdata) {
+					errorInconsistentData(romdata, bindata);
+					return -1;
+				}
+				mempos++;
+				binlength--;
+				bindata = fgetc(binfile);
+			}
+			
+			fclose(binfile);
 			
 			break;
 		
 		
 		
 		case DIR_SECTION:
-			token = identifyNextToken();
-			if(token.type != STRING) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(STRING);
 			strcpy(currentsection, (char*)token.content);
 			
-			token = identifyNextToken();
-			if(token.type != COMMA) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(COMMA);
 			
-			token = identifyNextToken();
-			if(token.type != REGION_TYPE) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(REGION_TYPE);
 			currentregion = token.content;
+			
+			saveAsmPos();
+			token = identifyNextToken();
+			if(token.type == MEMORY_OPEN) {
+				long result;
+				int calcresult = calculateExpression(&result);
+				if(calcresult == 1) {
+					errorUnableToCalculate();
+					return -1;
+				} if(calcresult != 0) return -1;
+				// mempos = result;
+				// romfilepos?
+				token = assertNextTokenType(MEMORY_CLOSE);
+			} else restoreAsmPos();
+			
+			loaddata = false;
+			loadlabels = false;
+			
+			break;
+		
+		case DIR_ENDSECTION:
+			currentsection[0] = '\0';
+			currentregion = INVALID_REGION_TYPE;
+			
+			loaddata = false;
+			loadlabels = false;
+			
+			break;
+		
+		case DIR_LOAD:
+			loaddata = true;
+			
+			token = assertNextTokenType(STRING);
+			token = assertNextTokenType(COMMA);
+			token = assertNextTokenType(REGION_TYPE);
+			
+			break;
+		
+		case DIR_ENDL:
+			if(loaddata) loaddata = false;
+			
+			if(loadlabels) {
+				strcpy(currentsection, metasection);
+				loadlabels = false;
+			}
 			
 			break;
 		
 		
 		
 		case DIR_UNION:
-			token = identifyNextToken();
-			if(token.type != NEWLINE && token.type != END_OF_FILE) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextLineBreak();
 			
 			unionstart = mempos;
 			unionend = mempos;
@@ -4021,7 +5334,6 @@ if(charisliteral) printf("literal ");
 			}
 			if(ustatementresult != 3) return -1;
 			inunion = wasinunion;
-			mempos = unionend;
 			
 			break;
 		
@@ -4037,33 +5349,50 @@ if(charisliteral) printf("literal ");
 			break;
 		
 		case DIR_ENDU:
-			if(inunion) return 3;
-			errorUnexpectedToken(token);
-			return -1;
+			if(!inunion) {
+				errorUnexpectedToken(token);
+				return -1;
+			}
+			
+			if(mempos > unionend) unionend = mempos;
+			mempos = unionend;
+			
+			return 3;
 		
 		
 		
 		case DIR_FAIL:
-			token = identifyNextToken();
-			if(token.type != STRING) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(STRING);
 			errorFail((char*)token.content);
 			return -1;
 			
 		case DIR_WARN:
-			token = identifyNextToken();
-			if(token.type != STRING) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(STRING)
 			errorWarn((char*)token.content);
 			break;
 			
 		case DIR_ASSERT: {
 			long result;
-			if(calculateExpression(&result) != 0) return -1;
+			int calcresult = calculateExpression(&result);
+			if(calcresult == 1) {
+				result = 1;
+				saveAsmPos();
+				token = identifyNextToken();
+				if(token.type != COMMA) restoreAsmPos();
+				else {
+					token = identifyNextToken();
+					if(token.type == DIRECTIVE && token.content == DIR_STRCAT) {
+						token = assertNextToken(OPERATOR, OPEN_PARENTHESIS);
+						token = assertNextTokenType(STRING);
+						token = assertNextTokenType(COMMA);
+						token = assertNextTokenType(STRING);
+						token = assertNextToken(OPERATOR, CLOSE_PARENTHESIS);
+					}
+					else assertTokenType(token, STRING);
+				}
+			}
+			else if(calcresult != 0) return -1;
+			
 			saveAsmPos();
 			token = identifyNextToken();
 			if(token.type != COMMA) {
@@ -4074,17 +5403,57 @@ if(charisliteral) printf("literal ");
 				restoreAsmPos();
 			} else {
 				token = identifyNextToken();
-				if(token.type != STRING) {
-					errorUnexpectedToken(token);
-					return -1;
-				}
-				if(result == 0) {
-					errorAssertWithMessage((char*)token.content);
-					return -1;
-				}
+				if(token.type == DIRECTIVE && token.content == DIR_STRCAT) {
+					token = assertNextToken(OPERATOR, OPEN_PARENTHESIS);
+					token = assertNextTokenType(STRING);
+					char str1[strlen((char*)token.content)+1];
+					strcpy(str1, (char*)token.content);
+					token = assertNextTokenType(COMMA);
+					token = assertNextTokenType(STRING);
+					char str2[strlen(str1) + strlen((char*)token.content)+1];
+					strcpy(str2, str1);
+					strcpy(&str2[strlen(str1)], (char*)token.content);
+					token = assertNextToken(OPERATOR, CLOSE_PARENTHESIS);
+					if(result == 0) {
+						errorAssertWithMessage(str2);
+						return -1;
+					}
+				} else assertTokenType(token, STRING);
 			}
-			break;}
 			
+			break;}
+		
+		
+		
+		case DIR_OPT:
+		case DIR_PUSHO: {
+			char c = getNextChar();
+			while(isWhitespace(c)) c = getNextChar();
+			while(c != '\n' && c != ';') {
+				if(c == 'b') {
+					c = getNextChar();
+					while(isWhitespace(c)) c = getNextChar();
+					bin0 = c;
+					c = getNextChar();
+					while(isWhitespace(c)) c = getNextChar();
+					bin1 = c;
+				}
+				
+				saveAsmPos();
+				c = getNextChar();
+				while(isWhitespace(c)) c = getNextChar();
+			}
+			
+			restoreAsmPos();
+			
+			break;}
+		
+		case DIR_POPO:
+			bin0 = '0';
+			bin1 = '1';
+			
+			break;
+		
 		
 		
 		
@@ -4093,11 +5462,7 @@ if(charisliteral) printf("literal ");
 			return -1;
 		}
 		
-		token = identifyNextToken();
-		if(token.type != NEWLINE && token.type != END_OF_FILE) {
-			errorUnexpectedToken(token);
-			return -1;
-		}
+		token = assertNextLineBreak();
 		
 		break;
 	
@@ -4109,8 +5474,10 @@ if(charisliteral) printf("literal ");
 		// process arguments
 		unsigned char* macroargs[64];
 		unsigned int macroargcount = 0;
+		unsigned int currentlinenumber = linenumber;
 		char nextchar = getNextChar(asmfile);
 		while(isWhitespace(nextchar)) nextchar = getNextChar(asmfile);
+		long asmfilepos = ftell(asmfile) - 1;
 		if(nextchar == ';' || nextchar == '\n') {
 			if(nextchar == ';') while(getNextChar(asmfile) != '\n') continue;
 			if(currentmacro == 0) linenumber++;
@@ -4122,24 +5489,219 @@ if(charisliteral) printf("literal ");
 					if(nextchar == ';') while(getNextChar(asmfile) != '\n') continue;
 					if(currentmacro == 0) linenumber++;
 					while(isWhitespace(macroargs[macroargcount][ii-1])) ii--;
-					macroargs[macroargcount][ii] = '\0';
-					macroargs[macroargcount] = realloc(macroargs[macroargcount], ii+1);
+					if(ii > 0) {
+						macroargs[macroargcount][ii] = '\0';
+						macroargs[macroargcount] = realloc(macroargs[macroargcount], ii+1);
+					} else free(macroargs[macroargcount--]);
 					break;
 				} else if(nextchar == ',') {
-					macroargs[macroargcount][ii] = '\0';
-					macroargs[macroargcount] = realloc(macroargs[macroargcount], ii+1);
-					macroargcount++;
-					ii = 0;
-					macroargs[macroargcount] = malloc(1024);
+					if(ii > 0) {
+						macroargs[macroargcount][ii] = '\0';
+						macroargs[macroargcount] = realloc(macroargs[macroargcount], ii+1);
+						macroargcount++;
+						ii = 0;
+						macroargs[macroargcount] = malloc(1024);
+					}
 					nextchar = getNextChar(asmfile);
 					while(isWhitespace(nextchar)) nextchar = getNextChar(asmfile);
+				} else if(nextchar == '\"' && (ii == 0 || macroargs[macroargcount][ii-1] != '\\')) {
+					charisliteral = true;
+					macroargs[macroargcount][ii++] = nextchar;
+					nextchar = getNextChar(asmfile);
+					while(nextchar != '\"') {
+						macroargs[macroargcount][ii++] = nextchar;
+						nextchar = getNextChar(asmfile);
+					}
+					if(strcmp(macros(macronum).name, "li") == 0 && currentmacro == 0) saveAsmPos();
+					macroargs[macroargcount][ii++] = nextchar;
+					charisliteral = false;
+					nextchar = getNextChar(asmfile);
+				} else if(nextchar == 18) {
+					// cancel
+					nextchar = getNextChar(asmfile);
 				} else {
 					macroargs[macroargcount][ii++] = nextchar;
 					nextchar = getNextChar(asmfile);
+					if(strcmp(macros(macronum).name, "hlcoord") == 0 && currentmacro == 0) saveAsmPos();
 				}
 			}
 			macroargcount++;
 		}
+		
+		if(strcmp(macros(macronum).name, "li") == 0 && currentmacro == 0) {
+			long romfilepos = ftell(romfile);
+			char listr[strlen(macroargs[0])-1];
+			strncpy(listr, &macroargs[0][1], strlen(macroargs[0])-2);
+			listr[strlen(macroargs[0])-2] = '\0';
+			unsigned char* data = mapstring(listr);
+			unsigned int i;
+			for(i = 0; data[i] != '\0'; i++) {
+				unsigned char romdata = fgetc(romfile);
+				if(data[i] != romdata) break;
+			}
+			fseek(romfile, romfilepos, SEEK_SET);
+			
+			if(data[i] != '\0') {
+				// edit asm file to match rom file
+				// create the new asmfile
+				FILE* newasmfile = fopen("edit", "wb");
+				if(newasmfile == NULL) {
+					printf("Failed to create %s.\n", asmpath);
+					return -1;
+				}
+				
+				// copy the code up to 'li "'
+				rewind(asmfile);
+				while(ftell(newasmfile) < asmfilepos + 1) {
+					char c = getNextChar(asmfile);
+					fputc(c, newasmfile);
+				}
+				
+				// insert the new text
+				macroargs[0][1] = '\0';
+				unsigned char romdata;
+				romdata = fgetc(romfile);
+				while(romdata != 0x50) {
+					unsigned int mapchar;
+					for(mapchar = charmapcount-1; mapchar >= 0; mapchar--) if(charms(mapchar).value == romdata) break;
+					fputs(charms(mapchar).chars, newasmfile);
+					strcat(macroargs[0], charms(mapchar).chars);
+					romdata = fgetc(romfile);
+				}
+				fputc('\"', newasmfile);
+				strcat(macroargs[0], "\"");
+				
+				// copy the rest of the code
+				restoreAsmPos();
+				char c = getNextChar();
+				while(c != '\n') {
+					fputc(c, newasmfile);
+					c = getNextChar();
+				}
+				long resumeasmfile = ftell(newasmfile);
+				while(feof(asmfile) == 0) {
+					fputc(c, newasmfile);
+					c = getNextChar();
+				}
+				
+				// back up the old asmfile
+				char bakpath[strlen(asmpath)+strlen(".bak")+1];
+				strcpy(bakpath, asmpath);
+				strcat(bakpath, ".bak");
+				FILE* bakfile = fopen(bakpath, "rb");
+				if(bakfile == NULL) {
+					fclose(asmfile);
+					rename(asmpath, bakpath);
+				} else {
+					fclose(bakfile);
+					fclose(asmfile);
+					remove(asmpath);
+				}
+				
+				// replace the old asmfile with the new asmfile
+				fclose(newasmfile);
+				rename("edit", asmpath);
+				asmfile = fopen(asmpath, "rb");
+				fseek(asmfile, resumeasmfile, SEEK_SET);
+				while(getNextChar() != '\n') continue;
+				fseek(romfile, romfilepos, SEEK_SET);
+			}
+		}
+		
+		if(strcmp(macros(macronum).name, "hlcoord") == 0 && currentmacro == 0) {
+			long romfilepos = ftell(romfile);
+			#define SCREEN_WIDTH (20)
+			#define wTileMap (0xC3A0)
+			unsigned char coordx = 0;
+			unsigned char coordy = 0;
+			bool validcoords = true;
+			for(unsigned int i = 0; macroargs[0][i] != '\0'; i++) {
+				if(!isNumber(macroargs[0][i])) {
+					validcoords = false;
+					break;
+				}
+				coordx *= 10;
+				coordx += macroargs[0][i] - '0';
+			}
+			for(unsigned int i = 0; macroargs[1][i] != '\0'; i++) {
+				if(!isNumber(macroargs[1][i])) {
+					validcoords = false;
+					break;
+				}
+				coordy *= 10;
+				coordy += macroargs[1][i] - '0';
+			}
+			unsigned int asmdata = coordy * SCREEN_WIDTH + coordx + wTileMap;
+			if(fgetc(romfile) != 0x21) {
+				printLocation();
+				printf("Error: Instruction 'hlcoord %s, %s' inconsistent with ROM data", macroargs[0], macroargs[1]);
+				return -1;
+			}
+			unsigned int romdata = fgetc(romfile) | (fgetc(romfile) << 8);
+			fseek(romfile, romfilepos, SEEK_SET);
+			
+			if(asmdata != romdata && validcoords) {
+				// edit asm file to match rom file
+				// create the new asmfile
+				FILE* newasmfile = fopen("edit", "wb");
+				if(newasmfile == NULL) {
+					printf("Failed to create %s.\n", asmpath);
+					return -1;
+				}
+				
+				// copy the code up to 'hlcoord '
+				rewind(asmfile);
+				while(ftell(newasmfile) < asmfilepos) {
+					char c = getNextChar(asmfile);
+					fputc(c, newasmfile);
+				}
+				
+				// replace args and insert the new text
+				sprintf(macroargs[0], "%d", (romdata - wTileMap) % 20);
+				sprintf(macroargs[1], "%d", (romdata - wTileMap) / 20);
+				fputs(macroargs[0], newasmfile);
+				fputs(", ", newasmfile);
+				fputs(macroargs[1], newasmfile);
+				fputc('\n', newasmfile);
+				linenumber++;
+				long resumeasmfile = ftell(newasmfile);
+				
+				// copy the rest of the code
+				restoreAsmPos();
+				char c = getNextChar();
+				while(feof(asmfile) == 0) {
+					fputc(c, newasmfile);
+					c = getNextChar();
+				}
+				
+				// back up the old asmfile
+				char bakpath[strlen(asmpath)+strlen(".bak")+1];
+				strcpy(bakpath, asmpath);
+				strcat(bakpath, ".bak");
+				FILE* bakfile = fopen(bakpath, "rb");
+				fclose(asmfile);
+				if(bakfile == NULL) {
+					rename(asmpath, bakpath);
+				} else {
+					fclose(bakfile);
+					remove(asmpath);
+				}
+				
+				// replace the old asmfile with the new asmfile
+				fclose(newasmfile);
+				rename("edit", asmpath);
+				asmfile = fopen(asmpath, "rb");
+				fseek(asmfile, resumeasmfile, SEEK_SET);
+				fseek(romfile, romfilepos, SEEK_SET);
+			}
+		}
+// if(strcmp(asmpath, "constants/music_constants.asm") == 0) {
+// 	printf("\n");
+// 	for(unsigned int i = 0; i < macroargcount; i++) {
+// 		printf("%s, ", macroargs[i]);
+// 	}
+// 	printf("\n");
+// }
 		
 		// perform macro
 		unsigned char* returncurrentmacro = currentmacro;
@@ -4160,8 +5722,11 @@ if(charisliteral) printf("literal ");
 		expandedstrspos = macroexpandedstrspos;
 		unsigned int returnexpandedstrcount = expandedstrcount;
 		expandedstrcount = 0;
+		newuniqueaffix = true;
 		
 		unsigned int returnlinenumber = linenumber;
+		linenumber = currentlinenumber;
+		bool returnbackedup = asmfilebackedup;
 		
 		int statementresult = 0;
 		while(statementresult == 0) {
@@ -4181,6 +5746,248 @@ if(charisliteral) printf("literal ");
 		expandedstrcount = returnexpandedstrcount;
 		
 		linenumber = returnlinenumber;
+		asmfilebackedup = returnbackedup;
+		//if(currentmacro == 0) linenumber++;
+		
+		break;}
+	
+	
+	
+	case TEXT_MACRO: {
+		// create the new asmfile
+		FILE* newasmfile = fopen("edit", "wb");
+		if(newasmfile == NULL) {
+			printf("Failed to create %s.\n", asmpath);
+			return -1;
+		}
+		
+		
+		// copy the code so far
+		saveAsmPos();
+		rewind(asmfile);
+		while(ftell(newasmfile) < savedasmfilepos - strlen("\n\ttext_far")-1) fputc(fgetc(asmfile), newasmfile);
+		restoreAsmPos();
+		long resumeasmfile = ftell(newasmfile);
+		long resumeromfile = ftell(romfile);
+		
+		
+		// find the existing text
+		token = identifyNextToken();
+		if(token.type != LABEL && token.type != UNRECORDED_SYMBOL && token.type != ASSUMPTION) {
+			errorUnexpectedToken(token);
+			return -1;
+		}
+		char textlabel[strlen((char*)token.content)+1];
+		strcpy(textlabel, (char*)token.content);
+		FILE* textfile = 0;
+		{
+			FILE* supertextfile = fopen("text.asm", "rb");
+			if(supertextfile == NULL) {
+				errorCannotFindFile("text.asm");
+				return -1;
+			}
+			char symbol[256];
+			unsigned int i = 0;
+			while(feof(supertextfile) == 0) {
+				symbol[i] = fgetc(supertextfile);
+				if(!isAlpha(symbol[i])) {
+					symbol[i] = '\0';
+					if(i > 0 && strcmp(symbol, DIRECTIVES[DIR_INCLUDE]) == 0) {
+						while(fgetc(supertextfile) != '\"') continue;
+						i = 0;
+						symbol[i] = fgetc(supertextfile);
+						while(symbol[i] != '\"') symbol[++i] = fgetc(supertextfile);
+						symbol[i] = '\0';
+						textfile = fopen(symbol, "rb");
+						if(textfile == NULL) {
+							errorCannotFindFile(symbol);
+							return -1;
+						}
+						i = 0;
+						while(feof(textfile) == 0) {
+							symbol[i] = fgetc(textfile);
+							if(!isAlphanumeric(symbol[i]) && symbol[i] != '_') {
+								char c = symbol[i];
+								symbol[i] = '\0';
+								if(c == '\"') while(fgetc(textfile) != '\"') continue;
+								else if(c == ':') {
+									if(strcmp(textlabel, symbol) == 0) {
+										while(fgetc(textfile) != '\n') continue;
+										break;
+									}
+								}
+								i = 0;
+							} else i++;
+						}
+						if(feof(textfile) == 0) break;
+						fclose(textfile);
+						textfile = 0;
+					}
+					i = 0;
+				} else i++;
+			}
+			if(textfile == 0) {
+				errorCannotFindFile(textlabel);
+				return -1;
+			}
+		}
+		long textfilestart = ftell(textfile);
+		linenumber++;
+		
+		
+		// insert the text data inferred by the romfile
+		unsigned int commandcount[TEXT_COMMAND_COUNT];
+		for(unsigned int i = 0; i < TEXT_COMMAND_COUNT; i++) commandcount[i] = 0;
+		while(true) {
+			long romfilepos = ftell(romfile);
+			unsigned char romdata = fgetc(romfile);
+			enum textcommand command;
+			for(command = 0; command < TEXT_COMMAND_COUNT; command++) if(romdata == TEXT_COMMAND_IDS[command]) break;
+			if(command == TX_DB) fseek(romfile, romfilepos, SEEK_SET);
+			commandcount[command]++;
+			
+			fputc('\n', newasmfile);
+			if(command == PARA) fputc('\n', newasmfile);
+			fputc('\t', newasmfile);
+			
+			enum textcommand nextcommand;
+			romfilepos = ftell(romfile);
+			switch(command) {
+			case TEXT:
+				// determine "text" or "text_start"
+				romdata = fgetc(romfile);
+				fseek(romfile, romfilepos, SEEK_SET);
+				for(nextcommand = 0; nextcommand < TEXT_COMMAND_COUNT; nextcommand++) if(romdata == TEXT_COMMAND_IDS[nextcommand]) break;
+				if(newTextcommand(nextcommand)) {
+					command = TEXT_START;
+					goto textcommand_default;
+				}
+			case NEXT:
+			case LINE:
+			case PARA:
+			case CONT:
+			case PAGE:
+			case TX_DB:
+				fputs(TEXT_COMMANDS[command], newasmfile);
+				fputc(' ', newasmfile);
+				
+				// write text
+				romdata = fgetc(romfile);
+				for(nextcommand = 0; nextcommand < TEXT_COMMAND_COUNT; nextcommand++) if(romdata == TEXT_COMMAND_IDS[nextcommand]) break;
+				if(newTextcommand(nextcommand)) {
+					fseek(romfile, romfilepos, SEEK_SET);
+					break;
+				}
+				
+				fputc('\"', newasmfile);
+				while(!newTextcommand(nextcommand)) {
+					romfilepos = ftell(romfile);
+					
+					// reverse charmap
+					unsigned int mapchar;
+					for(mapchar = charmapcount-1; mapchar >= 0; mapchar--) if(charms(mapchar).value == romdata) break;
+					fputs(charms(mapchar).chars, newasmfile);
+					if(romdata == 0x50) break;
+					
+					romdata = fgetc(romfile);
+					for(nextcommand = 0; nextcommand < TEXT_COMMAND_COUNT; nextcommand++) if(romdata == TEXT_COMMAND_IDS[nextcommand]) break;
+				}
+				fseek(romfile, romfilepos, SEEK_SET);
+				fputc('\"', newasmfile);
+				
+				break;
+			
+			case TEXT_RAM:
+			case TEXT_BCD:
+			case TEXT_MOVE:
+			case TEXT_BOX:
+			case TEXT_DECIMAL:
+			case TEXT_DOTS: {
+				fputs(TEXT_COMMANDS[command], newasmfile);
+				unsigned int commandnum = commandcount[command];
+				fseek(textfile, textfilestart, SEEK_SET);
+				char symbol[256];
+				unsigned int i = 0;
+				while(true) {
+					long textfilepos = ftell(textfile);
+					symbol[i] = fgetc(textfile);
+					if(!isAlpha(symbol[i]) && symbol[i] != '_') {
+						char c = symbol[i];
+						symbol[i] = '\0';
+						if(c == '\"') while(fgetc(textfile) != '\"') continue;
+						else if(i > 0 && strcmp(symbol, TEXT_COMMANDS[command]) == 0) {
+							if(commandnum == 1) {
+								while(c != '\n') {
+									fputc(c, newasmfile);
+									c = fgetc(textfile);
+								}
+								break;
+							} else commandnum--;
+						} else if(c == ':') {
+							printLocation();
+							printf("\nNo matching text command for %s\n", TEXT_COMMANDS[command]);
+							return -1;
+						}
+						i = 0;
+					} else i++;
+				}
+				
+				for(unsigned int i = TEXT_COMMAND_SIZES[command]-1; i > 0; i--) fgetc(romfile);
+				
+				break;}
+			
+			case DEX:
+				romdata = fgetc(romfile);
+				if(romdata != 0x50) {
+					fseek(romfile, romfilepos, SEEK_SET);
+					fputs("db \"<DEXEND>\"", newasmfile);
+					break;
+				}
+				mempos++;
+			
+			textcommand_default:
+			default:
+				fputs(TEXT_COMMANDS[command], newasmfile);
+				break;
+			}
+			if(terminatingTextcommand(command)) break;
+		}
+		
+		fclose(textfile);
+		
+		
+		// copy the rest of the code
+		token = assertNextLineBreak();
+		while(token.type != TEXT_MACRO && (token.type != MACRO && strcmp(macros(token.content).name, "text_asm") != 0) && (feof(asmfile) == 0)) token = identifyNextToken();
+		char c = getNextChar();
+		while(feof(asmfile) == 0) {
+			fputc(c, newasmfile);
+			c = getNextChar();
+		}
+		
+		
+		// back up the old asmfile
+		char bakpath[strlen(asmpath)+strlen(".bak")+1];
+		strcpy(bakpath, asmpath);
+		strcat(bakpath, ".bak");
+		FILE* bakfile = fopen(bakpath, "rb");
+		if(bakfile == NULL) {
+			fclose(asmfile);
+			rename(asmpath, bakpath);
+		} else {
+			fclose(bakfile);
+			fclose(asmfile);
+			remove(asmpath);
+		}
+		
+		
+		// replace the old asmfile with the new asmfile
+		fclose(newasmfile);
+		rename("edit", asmpath);
+		asmfile = fopen(asmpath, "rb");
+		fseek(asmfile, resumeasmfile, SEEK_SET);
+		fseek(romfile, resumeromfile, SEEK_SET);
+		
 		
 		break;}
 	
@@ -4204,6 +6011,8 @@ if(charisliteral) printf("literal ");
 
 
 int findSection(enum asmregiontype region, char* section) {
+  bool wasdebug = debug;
+  debug = false;
 	// process pre-section
 	while(currentsection[0] == '\0') {
 	  if(debug) printf("\n%d. ", linenumber);
@@ -4211,211 +6020,182 @@ int findSection(enum asmregiontype region, char* section) {
 		if(statementresult == 1) break;
 		if(statementresult == 2) {
 			// include
-			struct token token = identifyNextToken();
-			if(token.type != STRING) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			struct token token = assertNextTokenType(STRING);
 			
 			FILE* returnasmfile = asmfile;
+			char* returnasmpath = asmpath;
 			long returnasmfilepos = ftell(asmfile);
 			unsigned int returnlinenumber = linenumber;
+			bool returnbackedup = asmfilebackedup;
 			asmfile = fopen((char*)token.content, "rb");
 			if(asmfile == NULL) {
-				printf("Cannot find assembly file \"%s\".\n", (char*)token.content);
+				errorCannotFindFile((char*)token.content);
 				return -1;
 			}
+			char newasmpath[strlen((char*)token.content)+1];
+			strcpy(newasmpath, (char*)token.content);
+			asmpath = newasmpath;
 			linenumber = 1;
 			
 		  if(debug) printf("\n\n%s:", token.content);
 			int findresult = 0;
+		  debug = wasdebug;
 			while(findresult == 0) findresult = findSection(region, section);
+		  debug = false;
 			
 			fclose(asmfile);
 			asmfile = returnasmfile;
 			fseek(asmfile, returnasmfilepos, SEEK_SET);
 			linenumber = returnlinenumber;
+			asmfilebackedup = returnbackedup;
+			asmpath = returnasmpath;
 			
+		  debug = wasdebug;
 			if(findresult != 1) return findresult;
+		  debug = false;
 		  if(debug) printf("\n\n:");
 			
-			token = identifyNextToken();
-			if(token.type != NEWLINE && token.type != END_OF_FILE) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextLineBreak();
 			
 			continue;
 		}
 		if(statementresult != 0) return -1;
 	}
+  debug = wasdebug;
 	
 	// skip over unrelated sections
 	if(strcmp(currentsection, section) != 0) {
+	  debug = false;
 		charisliteral = true;
 		
 	  if(debug) printf("\n%d. ", linenumber);
 		struct token token = identifyNextToken();
-		while((token.type != DIRECTIVE || (token.content != DIR_SECTION && token.content != DIR_INCLUDE)) && token.type != END_OF_FILE) {
+		while((token.type != DIRECTIVE || (token.content != DIR_SECTION && token.content != DIR_INCLUDE && token.content != DIR_LOAD))
+			&& token.type != END_OF_FILE) {
 		  if(debug) if(token.type == NEWLINE) printf("\n%d. ", linenumber);
 			token = identifyNextToken();
 		}
 		
 		
+	  debug = wasdebug;
 		if(token.type == END_OF_FILE) return 1;
+	  debug = false;
 		
 		
 		// include
 		if(token.content == DIR_INCLUDE) {
-			token = identifyNextToken();
-			if(token.type != STRING) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(STRING);
 			
 			FILE* returnasmfile = asmfile;
+			char* returnasmpath = asmpath;
 			long returnasmfilepos = ftell(asmfile);
 			unsigned int returnlinenumber = linenumber;
+			bool returnbackedup = asmfilebackedup;
 			asmfile = fopen((char*)token.content, "rb");
 			if(asmfile == NULL) {
-				printf("Cannot find assembly file \"%s\".\n", (char*)token.content);
+				errorCannotFindFile((char*)token.content);
 				return -1;
 			}
+			char newasmpath[strlen((char*)token.content)+1];
+			strcpy(newasmpath, (char*)token.content);
+			asmpath = newasmpath;
 			linenumber = 1;
 			
 		  if(debug) printf("\n\n%s:", token.content);
 			int findresult = 0;
+		  debug = wasdebug;
 			while(findresult == 0) findresult = findSection(region, section);
+		  debug = false;
 				
 			fclose(asmfile);
 			asmfile = returnasmfile;
 			fseek(asmfile, returnasmfilepos, SEEK_SET);
+			asmpath = returnasmpath;
 			linenumber = returnlinenumber;
+			asmfilebackedup = returnbackedup;
 			
+		  debug = wasdebug;
 			if(findresult != 1) return findresult;
-		  if(debug) printf("\n\n:");
+		  debug = false;
 			
 			token = identifyNextToken();
 		}
 		
 		
 		// section
-		else {
+		else if(token.content == DIR_SECTION) {
+		  debug = wasdebug;
 			charisliteral = false;
+			loadlabels = false;
 			
-			token = identifyNextToken();
-			if(token.type != STRING) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(STRING);
 			strcpy(currentsection, (char*)token.content);
 			
-			token = identifyNextToken();
-			if(token.type != COMMA) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(COMMA);
 			
-			token = identifyNextToken();
-			if(token.type != REGION_TYPE) {
-				errorUnexpectedToken(token);
-				return -1;
-			}
+			token = assertNextTokenType(REGION_TYPE);
 			currentregion = token.content;
 			
 			token = identifyNextToken();
 			if(token.type == MEMORY_OPEN) {
 				long result;
-				if(calculateExpression(&result) != 0) return -1;
-				if(strcmp(currentsection, section) == 0) {
-					mempos = result;
-					// romfilepos?
-				}
-				token = identifyNextToken();
-				if(token.type != MEMORY_CLOSE) {
-					errorUnexpectedToken(token);
+				int calcresult = calculateExpression(&result);
+				if(calcresult == 1) {
+					errorUnableToCalculate();
 					return -1;
+				} if(calcresult != 0) return -1;
+				if(strcmp(currentsection, section) == 0) {
+					mempos = result | (mempos & 0xFF0000);
+					fseek(romfile, mempos>>16 == 0 ? mempos : (mempos&0xFFFF) - 0x4000 + (0x4000 * (mempos>>16)), SEEK_SET);
 				}
+				token = assertNextTokenType(MEMORY_CLOSE);
 				token = identifyNextToken();
 			}
 		}
 		
-		if(token.type != NEWLINE && token.type != END_OF_FILE) {
-			errorUnexpectedToken(token);
-			return -1;
+		// load
+		else {
+		  debug = wasdebug;
+			charisliteral = false;
+			loadlabels = true;
+			
+			token = assertNextTokenType(STRING);
+			strcpy(metasection, currentsection);
+			strcpy(currentsection, (char*)token.content);
+			
+			token = assertNextTokenType(COMMA);
+			
+			token = assertNextTokenType(REGION_TYPE);
+			currentregion = token.content;
+			
+			token = identifyNextToken();
 		}
 		
+		assertLineBreak(token);
+		
+	  debug = wasdebug;
 		return 0;
 	}
 	
 	
 	// process section
 	else {
+	  debug = wasdebug;
 		charisliteral = false;
-	  printf("Found %s!!\n", section);
-	  bool wasdebug = debug;
-	  debug = true;
 		int statementresult = 0;
 		while(statementresult == 0) {
 		  if(debug) printf("\n%d. ", linenumber);
 			statementresult = processNextStatement();
-			if(strcmp(currentsection, section) != 0) {printf("\n\n"); debug = wasdebug; return 2;}
+			if(statementresult == -1) return -1;
+			if(strcmp(currentsection, section) != 0 || feof(asmfile)) return 2;
 		}
-	  if(debug) printf("\n\n");
-	  debug = wasdebug;
+	  if(debug) printf("\n");
 		if(statementresult == 1) return statementresult;
 		else return -1;
 	}
 }
 
-int processSection(enum asmregiontype region, char* section) {
-	for(unsigned int i = 0; i < sizeof(MAIN_FILES)/sizeof(MAIN_FILES[0]); i++) {
-		while(macrocount > localmacrostart) {
-			if(macrocount % 1024 == 0) free(macrolist[macrocount/1024]);
-			macrocount--;
-			free(macros(macrocount).name);
-			free(macros(macrocount).content);
-		}
-		while(variablecount > localvariablestart) {
-			if(variablecount % 1024 == 0) free(variablelist[variablecount/1024]);
-			variablecount--;
-			free(varbls(variablecount).name);
-		}
-		while(constantcount > localconstantstart) {
-			if(constantcount % 1024 == 0) free(constantlist[constantcount/1024]);
-			constantcount--;
-			free(consts(constantcount).name);
-		}
-		while(conststrcount > localconststrstart) {
-			if(conststrcount % 1024 == 0) free(conststrlist[conststrcount/1024]);
-			conststrcount--;
-			free(costrs(conststrcount).name);
-			free(costrs(conststrcount).content);
-		}
-		charisliteral = false;
-		instring = false;
-		lastsymbolislocal = false;
-		
-		asmfile = fopen(MAIN_FILES[i], "rb");
-		if(asmfile == NULL) {
-			printf("Cannot find \"%s\"\n", MAIN_FILES[i]);
-		}
-		linenumber = 1;
-		currentsection[0] = '\0';
-		currentsection[1] = '\1';
-		
-		int findresult = 0;
-	  if(debug) printf("\n\n%s:", MAIN_FILES[i]);
-		while(findresult == 0) findresult = findSection(region, section);
-		if(findresult == 2) return 0;
-		if(findresult != 1) return -1;
-	}
-	
-	errorSectionNotFound(section);
-	return -1;
-}
-
-int processRegion(FILE* layoutfile, enum asmregiontype region, unsigned char bank, unsigned int address) {
+int processRegion(FILE* layoutfile, enum asmregiontype region, unsigned char bank, char** files) {
 	rewind(layoutfile);
 	
 	// find region
@@ -4427,10 +6207,10 @@ int processRegion(FILE* layoutfile, enum asmregiontype region, unsigned char ban
 		while(isWhitespace(c)) c = fgetc(layoutfile);
 		
 		unsigned int ii;
-		for(ii = 0; ii < strlen(REGION_STRINGS[region]); ii++) {
-			if(c != REGION_STRINGS[region][ii]) break;
+		for(ii = 0; ii < strlen(REGIONS[region]); ii++) {
+			if(c != REGIONS[region][ii]) break;
 			c = fgetc(layoutfile);
-		} if(ii == strlen(REGION_STRINGS[region])) {
+		} if(ii == strlen(REGIONS[region])) {
 			while(isWhitespace(c)) c = fgetc(layoutfile);
 			
 			unsigned int value = 0;
@@ -4443,21 +6223,24 @@ int processRegion(FILE* layoutfile, enum asmregiontype region, unsigned char ban
 				}
 			} else if(c == '%') {
 				c = fgetc(layoutfile);
-				while(isBinary(c)) {
+				while(c == bin0 || c == bin1) {
 					value <<= 1;
-					value += c - '0';
+					if(c == bin1) value += 1;
 					c = fgetc(layoutfile);
 				}
 			} else if(c == '$') {
 				c = fgetc(layoutfile);
 				while(isHexadecimal(c)) {
 					value *= 0x10;
-					if(isHexadecimal(c)) value += c - '0';
+					if(isNumber(c)) value += c - '0';
 					else if(isUppercase(c)) value += c - 'A' + 0xA;
 					else if(isLowercase(c)) value += c - 'a' + 0xa;
 					c = fgetc(layoutfile);
 				}
-			}
+			} else if(c != '\n') {
+				printf("%s error: unexpected %c", LAYOUT_FILE, c);
+				return -1;
+			} else break;
 			
 			while(isWhitespace(c)) c = fgetc(layoutfile);
 			
@@ -4467,7 +6250,8 @@ int processRegion(FILE* layoutfile, enum asmregiontype region, unsigned char ban
 		while(c != '\n' && feof(layoutfile) == 0) c = fgetc(layoutfile);
 	}
 	
-	mempos = bank << 16 | (address & 0xFFFF);
+	mempos = bank << 16 | REGION_ADDRESSES[region];
+	fseek(romfile, mempos>>16 == 0 ? mempos : (mempos&0xFFFF) - 0x4000 + (0x4000 * (mempos>>16)), SEEK_SET);
 	currentregion = region;
 	
 	
@@ -4480,10 +6264,12 @@ int processRegion(FILE* layoutfile, enum asmregiontype region, unsigned char ban
 		token[i] = fgetc(layoutfile);
 		while(isWhitespace(token[i])) token[i] = fgetc(layoutfile);
 		
+		if(token[i] == ';') while(token[i] != '\n') token[i] = fgetc(layoutfile);
+		if(token[i] == '\n') continue;
+		
 		
 		// process section
 		if(token[i] == '\"') {
-printf("%0X ", mempos);
 			token[i] = fgetc(layoutfile);
 			while(token[i] != '\"') {
 				if(token[i] == '\\') {
@@ -4495,9 +6281,41 @@ printf("%0X ", mempos);
 			
 			char c = fgetc(layoutfile);
 			while(isWhitespace(c)) c = fgetc(layoutfile);
+			if(c == ';') while(c != '\n') c = fgetc(layoutfile);
 			if(c != '\n') break;
 			
-			if(processSection(region, token) != 0) return -1;
+		  printf("\nProcessing %s...", token);
+			for(unsigned int i = 0; files[i] != 0; i++) {
+				while(conststrcount > localconststrstart) {
+					if(conststrcount % 1024 == 0) free(conststrlist[conststrcount/1024]);
+					conststrcount--;
+					free(costrs(conststrcount).name);
+					free(costrs(conststrcount).content);
+				}
+				charisliteral = false;
+				
+				asmfile = fopen(files[i], "rb");
+				asmpath = files[i];
+				if(asmfile == NULL) {
+					errorCannotFindFile(files[i]);
+					return -1;
+				}
+				linenumber = 1;
+				currentsection[0] = '\0';
+				currentsection[1] = '\1';
+				
+				int findresult = 0;
+			  if(debug) printf("\n%s: ", files[i]);
+				while(findresult == 0) findresult = findSection(region, token);
+				if(findresult == 2) break;
+				if(findresult != 1) return -1;
+				
+				if(files[i+1] == 0) {
+					errorSectionNotFound(token);
+					return -1;
+				}
+			}
+			
 			continue;
 		}
 		
@@ -4521,9 +6339,9 @@ printf("%0X ", mempos);
 				}
 			} else if(token[i] == '%') {
 				token[++i] = fgetc(layoutfile);
-				while(isBinary(token[i])) {
+				while(token[i] == bin0 || token[i] == bin1) {
 					value <<= 1;
-					value += token[i] - '0';
+					if(token[i] == bin1) value += 1;
 					token[i] = fgetc(layoutfile);
 				}
 			} else if(token[i] == '$') {
@@ -4540,13 +6358,22 @@ printf("%0X ", mempos);
 			else break;
 			
 			mempos = (mempos & 0xFF0000) | value;
+			fseek(romfile, mempos>>16 == 0 ? mempos : (mempos&0xFFFF) - 0x4000 + (0x4000 * (mempos>>16)), SEEK_SET);
+			
 			continue;
 		}
 		
 		break;
 	}
 	
-	printf("\nEnded processing of %s at %0X\n\n", REGION_STRINGS[region], mempos);
+	if(region == WRAMX || region == SRAM || region == ROMX) {
+		char regstr[5];
+		strcpy(regstr, REGIONS[region]);
+		if(region == ROMX) regstr[3] = '\0';
+		else regstr[4] = '\0';
+		printf("\nFinished processing %s%0X at %0X\n", regstr, bank, mempos&0xFFFF);
+	}
+	else printf("\nFinished processing %s at %0X\n", REGIONS[region], mempos&0xFFFF);
 	return 0;
 }
 
@@ -4569,39 +6396,43 @@ int main(int argc, char *argv[]) {
 	unsigned int topexpandedstrspos[64];
 	expandedstrspos = topexpandedstrspos;
 	
+	macros(macrocount).name = "_GREEN";
+	incrementMacrolist;
+	
 	mempos = 0;
 	
 	// open rom
 	romfile = fopen(ROM_FILE, "rb");
 	if(romfile == NULL) {
-		printf("Cannot find ROM file \"%s\".\n", ROM_FILE);
+		errorCannotFindFile(ROM_FILE);
 		return -1;
 	}
 	
 	
 	
 	// includes
-	bool returndebug = debug;
-	debug = false;
 	for(unsigned int i = 0; i < sizeof(INCLUDE_FILES)/sizeof(INCLUDE_FILES[0]); i++) {
+		// open
 		asmfile = fopen(INCLUDE_FILES[i], "rb");
+		char newasmpath[strlen(INCLUDE_FILES[i])+1];
+		strcpy(newasmpath, INCLUDE_FILES[i]);
+		asmpath = newasmpath;
 		if(asmfile == NULL) {
-			printf("Cannot find \"%s\".\n", INCLUDE_FILES[i]);
+			errorCannotFindFile(INCLUDE_FILES[i]);
 			return -1;
 		}
 		linenumber = 1;
 		
+		// process
 		int statementresult = 0;
 		while(statementresult == 0) {
-			
 			statementresult = processNextStatement();
-			
 		}
 		if(statementresult != 1) return statementresult;
 		
+		// close
 		fclose(asmfile);
 	}
-	debug = returndebug;
 	
 	printf("\nProcessed include files\n");
 	
@@ -4613,143 +6444,168 @@ int main(int argc, char *argv[]) {
 	localconststrstart = conststrcount;
 	
 	
-	
 	// layout
 	FILE* layoutfile = fopen(LAYOUT_FILE, "rb");
 	if(layoutfile == NULL) {
-		printf("Cannot find \"%s\".\n", LAYOUT_FILE);
+		errorCannotFindFile(LAYOUT_FILE);
 		return -1;
 	}
-	if(processRegion(layoutfile, WRAM0, 0, 0xC000) != 0) return -1;
-	if(processRegion(layoutfile, VRAM,  0, 0x8000) != 0) return -1;
-	//if(processRegion(layoutfile, SRAM,  0, 0xA000) != 0) return -1;
-	
-	return 0;
+	char* mainfiles[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 	
 	
+	// ram
+	mainfiles[0] = "ram.asm";
+	if(processRegion(layoutfile, WRAM0,   0, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, VRAM,    0, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, SRAM, 0x00, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, SRAM, 0x01, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, SRAM, 0x02, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, SRAM, 0x03, mainfiles) != 0) return -1;
+	mainfiles[1] = "main.asm";
+	if(processRegion(layoutfile, HRAM,    0, mainfiles) != 0) return -1;
 	
 	
-	
-	// process assembly file
-	asmfile = fopen(argv[1], "rb"); // open the asm file
-	if(asmfile == NULL) {
-		printf("Cannot find assembly file \"%s\".\n", argv[1]);
-		return -1;
-	}
-	
-	linenumber = 1;
+	// home
+	mainfiles[0] = "home.asm";
+	if(processRegion(layoutfile, ROM0,    0, mainfiles) != 0) return -1;
 	
 	
-	
-	// process game file
-	romfile = fopen(argv[2], "rb"); // open the rom file
-	if(romfile == NULL) {
-		printf("Cannot find ROM file \"%s\".\n", argv[2]);
-		return -1;
-	}
-	
-	
-	
-	// validate the address argument, process it, and locate the address in rom file
-	if(argc == 4) {
-		if(strlen(argv[3]) != 7 || argv[3][2] != ':') {
-			printf("Invalid address \"%s\". Correct format is bb:aaaa.\n", argv[3]);
-			return -1;
+	// optional preemptive region
+	if(argc > 1) {
+		// option to process a region before the others
+		enum asmregiontype region = identifyRegiontype(argv[1]);
+		unsigned char bank = 0;
+		if(region == INVALID_REGION_TYPE) {
+			unsigned int i;
+			
+			if(region == INVALID_REGION_TYPE) {
+				const char romx[] = "ROM";
+				region = ROMX;
+				for(i = 0; i < strlen(romx); i++) if(argv[1][i] != romx[i] && argv[1][i] != romx[i] + 'a'-'A') {
+					region = INVALID_REGION_TYPE;
+					break;
+				}
+			}
+			
+			if(region == INVALID_REGION_TYPE) {
+				const char wramx[] = "WRAM";
+				region = WRAMX;
+				for(i = 0; i < strlen(wramx); i++) if(argv[1][i] != wramx[i] && argv[1][i] != wramx[i] + 'a'-'A') {
+					region = INVALID_REGION_TYPE;
+					break;
+				}
+			}
+			
+			if(region == INVALID_REGION_TYPE) {
+				const char sramx[] = "SRAM";
+				region = SRAM;
+				for(i = 0; i < strlen(sramx); i++) if(argv[1][i] != sramx[i] && argv[1][i] != sramx[i] + 'a'-'A') {
+					region = INVALID_REGION_TYPE;
+					break;
+				}
+			}
+			
+			if(region != INVALID_REGION_TYPE) {
+				while(isHexadecimal(argv[1][i])) {
+					bank *= 0x10;
+					if(isNumber(argv[1][i])) bank += argv[1][i] - '0';
+					else if(isUppercase(argv[1][i])) bank += argv[1][i] - 'A'+10;
+					else if(isLowercase(argv[1][i])) bank += argv[1][i] - 'a'+10;
+					i++;
+				}
+			}
 		}
 		
-		if(argv[3][6] >= '0' && argv[3][6] <= '9')      mempos += (argv[3][6] - '0'     ) * 0x1;
-		else if(argv[3][6] >= 'a' && argv[3][6] <= 'f') mempos += (argv[3][6] - 'a' + 10) * 0x1;
-		else if(argv[3][6] >= 'A' && argv[3][6] <= 'F') mempos += (argv[3][6] - 'A' + 10) * 0x1;
-		else {
-			printf("Invalid address \"%s\". Correct format is bb:aaaa.\n", argv[3]);
-			return -1;
-		}
-		
-		if(argv[3][5] >= '0' && argv[3][5] <= '9')      mempos += (argv[3][5] - '0'     ) * 0x10;
-		else if(argv[3][5] >= 'a' && argv[3][5] <= 'f') mempos += (argv[3][5] - 'a' + 10) * 0x10;
-		else if(argv[3][5] >= 'A' && argv[3][5] <= 'F') mempos += (argv[3][5] - 'A' + 10) * 0x10;
-		else {
-			printf("Invalid address \"%s\". Correct format is bb:aaaa.\n", argv[3]);
-			return -1;
-		}
-		
-		if(argv[3][4] >= '0' && argv[3][4] <= '9')      mempos += (argv[3][4] - '0'     ) * 0x100;
-		else if(argv[3][4] >= 'a' && argv[3][4] <= 'f') mempos += (argv[3][4] - 'a' + 10) * 0x100;
-		else if(argv[3][4] >= 'A' && argv[3][4] <= 'F') mempos += (argv[3][4] - 'A' + 10) * 0x100;
-		else {
-			printf("Invalid address \"%s\". Correct format is bb:aaaa.\n", argv[3]);
-			return -1;
-		}
-		
-		if(argv[3][3] >= '0' && argv[3][3] <= '9')      mempos += (argv[3][3] - '0'     ) * 0x1000;
-		else if(argv[3][3] >= 'a' && argv[3][3] <= 'f') mempos += (argv[3][3] - 'a' + 10) * 0x1000;
-		else if(argv[3][3] >= 'A' && argv[3][3] <= 'F') mempos += (argv[3][3] - 'A' + 10) * 0x1000;
-		else {
-			printf("Invalid address \"%s\". Correct format is bb:aaaa.\n", argv[3]);
-			return -1;
-		}
-		
-		if(argv[3][1] >= '0' && argv[3][1] <= '9')      mempos += (argv[3][1] - '0'     ) * 0x10000;
-		else if(argv[3][1] >= 'a' && argv[3][1] <= 'f') mempos += (argv[3][1] - 'a' + 10) * 0x10000;
-		else if(argv[3][1] >= 'A' && argv[3][1] <= 'F') mempos += (argv[3][1] - 'A' + 10) * 0x10000;
-		else {
-			printf("Invalid address \"%s\". Correct format is bb:aaaa.\n", argv[3]);
-			return -1;
-		}
-		
-		if(argv[3][0] >= '0' && argv[3][0] <= '9')      mempos += (argv[3][0] - '0'     ) * 0x100000;
-		else if(argv[3][0] >= 'a' && argv[3][0] <= 'f') mempos += (argv[3][0] - 'a' + 10) * 0x100000;
-		else if(argv[3][0] >= 'A' && argv[3][0] <= 'F') mempos += (argv[3][0] - 'A' + 10) * 0x100000;
-		else {
-			printf("Invalid address \"%s\". Correct format is bb:aaaa.\n", argv[3]);
-			return -1;
+		if(region != INVALID_REGION_TYPE) {
+			mainfiles[0] = "main.asm";
+			mainfiles[1] = "maps.asm";
+			mainfiles[2] = "audio.asm";
+			mainfiles[3] = "text.asm";
+			mainfiles[4] = "ram.asm";
+			mainfiles[5] = "gfx/pics.asm";
+			mainfiles[6] = "gfx/sprites.asm";
+			mainfiles[7] = "gfx/tilesets.asm";
+			
+			if(processRegion(layoutfile, region, bank, mainfiles) != 0) return -1;
 		}
 	}
 	
-	fseek(romfile, mempos, SEEK_SET);
-    mempos = ftell(romfile);
+	
+	// rom
+	mainfiles[0] = "main.asm";
+	mainfiles[1] = 0;
+	if(processRegion(layoutfile, ROMX, 0x01, mainfiles) != 0) return -1;
+	mainfiles[0] = "audio.asm";
+	if(processRegion(layoutfile, ROMX, 0x02, mainfiles) != 0) return -1;
+	mainfiles[0] = "main.asm";
+	if(processRegion(layoutfile, ROMX, 0x03, mainfiles) != 0) return -1;
+	mainfiles[1] = "gfx/sprites.asm";
+	mainfiles[2] = "text.asm";
+	mainfiles[3] = 0;
+	if(processRegion(layoutfile, ROMX, 0x04, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x05, mainfiles) != 0) return -1;
+	mainfiles[0] = "maps.asm";
+	mainfiles[1] = "main.asm";
+	mainfiles[2] = 0;
+	if(processRegion(layoutfile, ROMX, 0x06, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x07, mainfiles) != 0) return -1;
+	mainfiles[0] = "audio.asm";
+	if(processRegion(layoutfile, ROMX, 0x08, mainfiles) != 0) return -1;
+	mainfiles[0] = "gfx/pics.asm";
+	if(processRegion(layoutfile, ROMX, 0x09, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x0A, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x0B, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x0C, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x0D, mainfiles) != 0) return -1;
+	mainfiles[0] = "main.asm";
+	mainfiles[1] = 0;
+	if(processRegion(layoutfile, ROMX, 0x0E, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x0F, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x10, mainfiles) != 0) return -1;
+	mainfiles[0] = "maps.asm";
+	mainfiles[1] = "main.asm";
+	if(processRegion(layoutfile, ROMX, 0x11, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x12, mainfiles) != 0) return -1;
+	mainfiles[0] = "gfx/pics.asm";
+	mainfiles[1] = "maps.asm";
+	mainfiles[2] = "main.asm";
+	if(processRegion(layoutfile, ROMX, 0x13, mainfiles) != 0) return -1;
+	mainfiles[0] = "maps.asm";
+	mainfiles[1] = "main.asm";
+	mainfiles[2] = 0;
+	if(processRegion(layoutfile, ROMX, 0x14, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x15, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x16, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x17, mainfiles) != 0) return -1;
+	if(processRegion(layoutfile, ROMX, 0x18, mainfiles) != 0) return -1;
+	mainfiles[0] = "gfx/tilesets.asm";
+	mainfiles[1] = 0;
+	if(processRegion(layoutfile, ROMX, 0x19, mainfiles) != 0) return -1;
+	mainfiles[1] = "main.asm";
+	if(processRegion(layoutfile, ROMX, 0x1A, mainfiles) != 0) return -1;
+	mainfiles[1] = 0;
+	if(processRegion(layoutfile, ROMX, 0x1B, mainfiles) != 0) return -1;
+	mainfiles[0] = "main.asm";
+	if(processRegion(layoutfile, ROMX, 0x1C, mainfiles) != 0) return -1;
+	mainfiles[0] = "maps.asm";
+	mainfiles[1] = "main.asm";
+	if(processRegion(layoutfile, ROMX, 0x1D, mainfiles) != 0) return -1;
+	mainfiles[0] = "main.asm";
+	mainfiles[1] = 0;
+	if(processRegion(layoutfile, ROMX, 0x1E, mainfiles) != 0) return -1;
+	mainfiles[0] = "audio.asm";
+	if(processRegion(layoutfile, ROMX, 0x1F, mainfiles) != 0) return -1;
 	
 	
 	
-	// success
-	// printf("Opened assembly file and rom file successfully.\n");
-	// printf("Address: %02X:%04X\n\n", mempos>>16, mempos & 0xFFFF);
 	
+	// success!
+	char projectname[256];
+	getcwd(projectname, 256);
+	unsigned int shortnameindex;
+	for(unsigned int i = 0; projectname[i] != '\0'; i++) if(projectname[i] == '\\' || projectname[i] == '/') shortnameindex = i + 1;
+	strcpy(projectname, &projectname[shortnameindex]);
+	printf("\nSuccessfully validated %s with %s\n", projectname, ROM_FILE);
 	
-	
-	// create new asm file, confirming it doesn't already exist (but only up to ten times)
-	FILE* newasmfile;
-	char newasmfilepath[strlen(argv[1])+2];
-	newasmfilepath[0] = '\0';
-	strcat(newasmfilepath,argv[1]);
-	newasmfilepath[strlen(argv[1])] = '.';
-	newasmfilepath[strlen(argv[1])+1] = '0';
-	newasmfilepath[strlen(argv[1])+2] = '\0';
-	// while((newasmfile = fopen(newasmfilepath, "r")) != NULL) {
-	// 	fclose(newasmfile);
-	// 	newasmfilepath[strlen(argv[1])+1]++;
-	// 	if(newasmfilepath[strlen(argv[1])+1] > '9') {
-	// 		printf("Too many %s.# exist. Clean up the directory before proceeding.\n", argv[1]);
-	// 		return -1;
-	// 	}
-	// } fclose(newasmfile);
-	
-	newasmfile = fopen(newasmfilepath, "wb");
-	if(newasmfile == NULL) {
-		printf("Failed to create %s.\n", newasmfilepath);
-		return -1;
-	}
-	
-	
-	// compare rom with asm
-printf("\n\n%s:", argv[1]);
-	while(feof(asmfile) == 0) {
-printf("\n%d. ", linenumber);
-		
-		if(processNextStatement() != 0) return -1;
-	
-	}
-	
-	printf("Reached the end of the file at %02X:%04X. \n", mempos>>16, mempos & 0xFFFF);
 	return 0;
 }
