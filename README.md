@@ -9,6 +9,10 @@ This program performs the following tasks:
 - Automatically replaces `@`-terminated `db` strings, `text_far` macros, and `li` macros with the correct text. (based on pokered)
 - Automatically corrects inaccurate `hlcoord` macros. (based on pokered)
 
+To build gbcompare, simply compile gbcompare.c with your preferred C compiler. For example:
+
+```gcc gbcompare.c -o gbcompare.exe```
+
 ---
 
 This program is currently configured to Pokeblue. To configure gbcompare to a different project, it can be done manually in two locations of **gbcompare.c**:
