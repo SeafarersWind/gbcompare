@@ -8,12 +8,16 @@
 
 
 
-// POKEBLUE
+// *** POKEBLUE *******************************************************************************
+const char* ROM_FILE = "ao.gb";
+
+const char* LAYOUT_FILE = "layout.link";
+
 const char* INCLUDE_FILES[] = {
 	"includes.asm"
 };
 
-const char* MAIN_FILES[] = {
+char* MAIN_FILES[] = {
 	"ram.asm",
 	"text.asm",
 	"gfx/pics.asm",
@@ -25,10 +29,8 @@ const char* MAIN_FILES[] = {
 	"maps.asm",
 };
 
-const char* LAYOUT_FILE = "layout.link";
-
-const char* ROM_FILE = "ao.gb";
-// POKEBLUE
+char* DEF_SYMBOLS[] = { "_BLUE", 0 };
+// *** POKEBLUE *******************************************************************************
 
 bool debug = false;
 
@@ -57,7 +59,71 @@ FILE* romfile;
 
 
 
-int main(int argc, char *argv[]) {
+int optionRegion(int argc, char* argv[]) {
+	if(argc > 1) {
+		// option to process a region before the others
+		enum asmregiontype region = identifyRegiontype(argv[1]);
+		unsigned char bank = 0;
+		if(region == INVALID_REGION_TYPE) {
+			unsigned int i;
+			
+			if(region == INVALID_REGION_TYPE) {
+				const char romx[] = "ROM";
+				region = ROMX;
+				for(i = 0; i < strlen(romx); i++) if(argv[1][i] != romx[i] && argv[1][i] != romx[i] + 'a'-'A') {
+					region = INVALID_REGION_TYPE;
+					break;
+				}
+			}
+			
+			if(region == INVALID_REGION_TYPE) {
+				const char wramx[] = "WRAM";
+				region = WRAMX;
+				for(i = 0; i < strlen(wramx); i++) if(argv[1][i] != wramx[i] && argv[1][i] != wramx[i] + 'a'-'A') {
+					region = INVALID_REGION_TYPE;
+					break;
+				}
+			}
+			
+			if(region == INVALID_REGION_TYPE) {
+				const char sramx[] = "SRAM";
+				region = SRAM;
+				for(i = 0; i < strlen(sramx); i++) if(argv[1][i] != sramx[i] && argv[1][i] != sramx[i] + 'a'-'A') {
+					region = INVALID_REGION_TYPE;
+					break;
+				}
+			}
+			
+			if(region != INVALID_REGION_TYPE) {
+				while(isHexadecimal(argv[1][i])) {
+					bank *= 0x10;
+					if(isNumber(argv[1][i])) bank += argv[1][i] - '0';
+					else if(isUppercase(argv[1][i])) bank += argv[1][i] - 'A'+10;
+					else if(isLowercase(argv[1][i])) bank += argv[1][i] - 'a'+10;
+					i++;
+				}
+			}
+		}
+		
+		if(region != INVALID_REGION_TYPE) {
+			FILE* layoutfile = fopen(LAYOUT_FILE, "rb");
+			if(layoutfile == NULL) {
+				errorCannotFindFile(LAYOUT_FILE);
+				return -1;
+			}
+			
+			char* mainfiles[sizeof(MAIN_FILES)/sizeof(MAIN_FILES[0]) + 1];
+			for(unsigned int i = 0; i < sizeof(MAIN_FILES)/sizeof(MAIN_FILES[0]); i++) mainfiles[i] = MAIN_FILES[i];
+			mainfiles[sizeof(MAIN_FILES)/sizeof(MAIN_FILES[0])] = 0;
+			
+			if(processRegion(layoutfile, region, bank, mainfiles) != 0) return -1;
+		}
+	}
+}
+
+
+
+int main(int argc, char* argv[]) {
 	currentsection[0] = '\0';
 	currentsection[1] = '\0';
 	
@@ -76,10 +142,10 @@ int main(int argc, char *argv[]) {
 	
 	
 	
-	// POKEBLUE
-	macros(macrocount).name = "_BLUE";
-	incrementMacrolist;
-	// POKEBLUE
+	for(unsigned int i = 0; DEF_SYMBOLS[i] != 0; i++) {
+		consts(constantcount).name = DEF_SYMBOLS[i];
+		incrementConstantlist;
+	}
 	
 	
 	
@@ -134,8 +200,16 @@ int main(int argc, char *argv[]) {
 		errorCannotFindFile(LAYOUT_FILE);
 		return -1;
 	}
-	char* mainfiles[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 	
+	// main files
+	char* mainfiles[sizeof(MAIN_FILES)/sizeof(MAIN_FILES[0]) + 1];
+	for(unsigned int i = 0; i < sizeof(MAIN_FILES)/sizeof(MAIN_FILES[0]); i++) mainfiles[i] = MAIN_FILES[i];
+	mainfiles[sizeof(MAIN_FILES)/sizeof(MAIN_FILES[0])] = 0;
+	
+	
+	
+	
+	// *** LAYOUT *****************************************************************************
 	
 	// ram
 	mainfiles[0] = "ram.asm";
@@ -155,64 +229,7 @@ int main(int argc, char *argv[]) {
 	
 	
 	// optional preemptive region
-	if(argc > 1) {
-		// option to process a region before the others
-		enum asmregiontype region = identifyRegiontype(argv[1]);
-		unsigned char bank = 0;
-		if(region == INVALID_REGION_TYPE) {
-			unsigned int i;
-			
-			if(region == INVALID_REGION_TYPE) {
-				const char romx[] = "ROM";
-				region = ROMX;
-				for(i = 0; i < strlen(romx); i++) if(argv[1][i] != romx[i] && argv[1][i] != romx[i] + 'a'-'A') {
-					region = INVALID_REGION_TYPE;
-					break;
-				}
-			}
-			
-			if(region == INVALID_REGION_TYPE) {
-				const char wramx[] = "WRAM";
-				region = WRAMX;
-				for(i = 0; i < strlen(wramx); i++) if(argv[1][i] != wramx[i] && argv[1][i] != wramx[i] + 'a'-'A') {
-					region = INVALID_REGION_TYPE;
-					break;
-				}
-			}
-			
-			if(region == INVALID_REGION_TYPE) {
-				const char sramx[] = "SRAM";
-				region = SRAM;
-				for(i = 0; i < strlen(sramx); i++) if(argv[1][i] != sramx[i] && argv[1][i] != sramx[i] + 'a'-'A') {
-					region = INVALID_REGION_TYPE;
-					break;
-				}
-			}
-			
-			if(region != INVALID_REGION_TYPE) {
-				while(isHexadecimal(argv[1][i])) {
-					bank *= 0x10;
-					if(isNumber(argv[1][i])) bank += argv[1][i] - '0';
-					else if(isUppercase(argv[1][i])) bank += argv[1][i] - 'A'+10;
-					else if(isLowercase(argv[1][i])) bank += argv[1][i] - 'a'+10;
-					i++;
-				}
-			}
-		}
-		
-		if(region != INVALID_REGION_TYPE) {
-			mainfiles[0] = "main.asm";
-			mainfiles[1] = "maps.asm";
-			mainfiles[2] = "audio.asm";
-			mainfiles[3] = "text.asm";
-			mainfiles[4] = "ram.asm";
-			mainfiles[5] = "gfx/pics.asm";
-			mainfiles[6] = "gfx/sprites.asm";
-			mainfiles[7] = "gfx/tilesets.asm";
-			
-			if(processRegion(layoutfile, region, bank, mainfiles) != 0) return -1;
-		}
-	}
+	if(optionRegion(argc, argv) != 0) return -1;
 	
 	
 	// rom
@@ -279,6 +296,9 @@ int main(int argc, char *argv[]) {
 	if(processRegion(layoutfile, ROMX, 0x1E, mainfiles) != 0) return -1;
 	mainfiles[0] = "audio.asm";
 	if(processRegion(layoutfile, ROMX, 0x1F, mainfiles) != 0) return -1;
+	
+	// *** LAYOUT *****************************************************************************
+	
 	
 	
 	
