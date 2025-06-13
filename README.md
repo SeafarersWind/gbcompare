@@ -9,6 +9,8 @@ This program performs the following tasks:
 - Automatically replaces `@`-terminated `db` strings, `text_far` macros, and `li` macros with the correct text. (based on pokered)
 - Automatically corrects inaccurate `hlcoord` macros. (based on pokered)
 
+---
+
 This program is currently configured to Pokeblue. To configure gbcompare to a different project, it can be done manually in two locations of **gbcompare.c**:
 - The area near the start of gbcompare.c currently marked `POKEBLUE` defines the relevant files and predefined symbols.
 - The area near the end of gbcompare.c marked `LAYOUT` defines the regions to be processed and their order.
